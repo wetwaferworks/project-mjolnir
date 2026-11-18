@@ -1,0 +1,48 @@
+# Build output
+build/
+build-*/
+out/
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exe
+
+# Model weights and adapters never go in this repository
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.onnx
+*.npz
+*.npy
+weights/
+models/
+
+# Weight version stores, dream ledgers and run output stay on the machine that made them
+*.mjl
+*.blob
+*.ver
+*.pin
+dream-store/
+stores/
+runs/
+run-output/
+replays/
+grades/
+reports/local/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors and OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

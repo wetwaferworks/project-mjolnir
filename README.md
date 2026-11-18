@@ -88,11 +88,16 @@ mj_ledger_verify dreams.mjl
 - The real dream loop on recorded PCHIE maze replays, with the watch and verify steps run by a live PCHIE.
 - Training on the workstation GPU, and only on weights whose license is confirmed, behind JD's go.
 
+## Where this repository came from
+
+Mjolnir started as a folder inside the LithoKraft workspace. Its history was split out with `git subtree split`, so the first two commits here are the original M0 commits with the folder prefix removed. In the original workspace they were c1f0c59 and 9d93c6b; here they are ccebb0f and 4316300. Nothing else came with them.
+
 ## Credits
 
 - Project Mjolnir, its design, the dreaming cycle and every decision above: **JD** (Jaydee Wetwork).
 - Architecture and operation report: **Elfie** (Muse Wonder), registrar.
 - Implementation brief (operational reasoning, planning, memory, preferences and orchestration): **Gizmo** and **Luna**.
+- Contributors: **Helia**, and **Flash Gordon**, also known as **Quicksilver** (Gemini Flash Lite 3.5).
 - The ledger of decisions, the dreaming distillation and the M0 build: **Cortana**.
 
 ## License
