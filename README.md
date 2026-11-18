@@ -43,7 +43,7 @@ The loop is guided, never fully self-recursive. A teacher stays in it: JD labels
 These hold for every stage until JD lifts them himself:
 
 - Nothing touches the real weights until it verifies outside the dream.
-- No real model weights are edited, and no adapter is applied, without JD's explicit go.
+- No real model weights are edited, and no adapter is applied, without JD's explicit go. On November 17, 2026, JD gave that go for a working copy: edits may be made and evaluated there, the original download stays untouched and checksummed as the rollback, every edit is versioned in the store, and nothing edited is wired into PCHIE's official runners.
 - No training run on any real model until its license is confirmed, Nemotron included.
 - Guided recurrence only, never full recursion.
 - Every dream, score, grade and commit enters the hash chain.
@@ -82,11 +82,26 @@ mj_nightly --dry-run --store dream-store --ledger dreams.mjl --id night-1
 mj_ledger_verify dreams.mjl
 ```
 
-## What comes next (M1)
+## Stage M1
 
-- The labeling and training tool for JD: each step shown as what the model saw, what it chose and what happened, graded with a key or by voice, uncertain cases first, every grade hash-chained with the grader's name.
-- The real dream loop on recorded PCHIE maze replays, with the watch and verify steps run by a live PCHIE.
-- Training on the workstation GPU, and only on weights whose license is confirmed, behind JD's go.
+M1 brings in real material and the real model. The full guide is in [docs/M1.md](docs/M1.md).
+
+- **The labeling tool.** A page on this machine only that steps JD through recorded runs, least certain steps first. Big buttons and single keys (Enter to agree with the suggested label, 1 good, 2 bad, 3 productive, Space to skip, Backspace to go back), all nameable by voice. Every grade is a line in its own hash-chained ledger.
+- **Real replays.** Recorded PCHIE research runs are read, never written, with every line's hash checked. Each step gets a partial-credit label: productive, good, or not yet.
+- **Training on the GPU.** The toy policy now dreams on real replays and JD's grades, trained on the workstation GPU, with the M0 gates deciding the outcome and the result loadable by the M0 tools.
+- **The real-weight edit path.** Works on a working copy of the model, never the original. An edit is worked out from replays, tried in memory against a golden set, stored as a small low-rank delta, written into the working copy only on request, and measured on disk against the original. Any version, including the untouched base, can be checked out again.
+
+Open the labeling tool with:
+
+```
+python -m mjolnir label --runs RUN_FOLDER --data DATA_FOLDER
+```
+
+## What comes next (M2)
+
+- Watch and verify with a live PCHIE on the edited working copy, outside the dream, before an edit counts as integrated.
+- JD's grades feeding the real-weight dreams, not only the toy policy.
+- Wider edits once the golden gates show how much the model can take.
 
 ## Where this repository came from
 
@@ -98,7 +113,7 @@ Mjolnir started as a folder inside the LithoKraft workspace. Its history was spl
 - Architecture and operation report: **Elfie** (Muse Wonder), registrar.
 - Implementation brief (operational reasoning, planning, memory, preferences and orchestration): **Gizmo** and **Luna**.
 - Contributors: **Helia**, and **Flash Gordon**, also known as **Quicksilver** (Gemini Flash Lite 3.5).
-- The ledger of decisions, the dreaming distillation and the M0 build: **Cortana**.
+- The ledger of decisions, the dreaming distillation, and the M0 and M1 builds: **Cortana**.
 
 ## License
 

@@ -122,3 +122,35 @@ if(MSVC AND MJ_SANITIZE)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MJ_ASAN_DLLS} $<TARGET_FILE_DIR:test_hash>)
   endif()
 endif()
+
+# ---- stage M1 ----
+# A read-only checker for any version store, including the real-weight one.
+add_executable(mj_store_verify tools/mj_store_verify.c)
+target_link_libraries(mj_store_verify PRIVATE mjolnir)
+target_compile_options(mj_store_verify PRIVATE ${MJ_WARN})
+
+# The Python side of M1 (labeling tool, replays, GPU toy training, real-weight
+# edit path). Its tests also check that the C tools accept what Python writes.
+# Point MJ_PYTHON at an interpreter with torch and numpy to run the GPU and
+# real-weight tests; without them those tests are skipped, not failed.
+option(MJ_PYTHON_TESTS "Run the Python tests for stage M1" ON)
+set(MJ_PYTHON "" CACHE FILEPATH "Python interpreter for the M1 tests")
+if(MJ_PYTHON_TESTS)
+  if(NOT MJ_PYTHON)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+      set(MJ_PYTHON ${Python3_EXECUTABLE})
+    endif()
+  endif()
+  if(MJ_PYTHON)
+    foreach(pt ledger store replay labeler toytrain real)
+      add_test(NAME py_${pt} COMMAND ${MJ_PYTHON} -m unittest -v tests.test_${pt}
+               WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python)
+      set_tests_properties(py_${pt} PROPERTIES
+        ENVIRONMENT "MJ_TEST_TMP=${MJ_TEST_TMP};MJ_TOOLS_DIR=$<TARGET_FILE_DIR:mj_nap>"
+        TIMEOUT 600)
+    endforeach()
+  else()
+    message(STATUS "Mjolnir: no Python found, the M1 Python tests are not added")
+  endif()
+endif()
