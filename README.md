@@ -84,7 +84,7 @@ mj_ledger_verify dreams.mjl
 
 ## Stage M1
 
-M1 brings in real material and the real model. The full guide is in [docs/M1.md](docs/M1.md).
+M1 brings in real material and the real model. The full guide is in [docs/M1.md](docs/M1.md). How Mjolnir will sign in to hosted models is in [docs/MODEL-ACCESS.md](docs/MODEL-ACCESS.md).
 
 - **The labeling tool.** A page on this machine only that steps JD through recorded runs, least certain steps first. Big buttons and single keys (Enter to agree with the suggested label, 1 good, 2 bad, 3 productive, Space to skip, Backspace to go back), all nameable by voice. Every grade is a line in its own hash-chained ledger.
 - **Real replays.** Recorded PCHIE research runs are read, never written, with every line's hash checked. Each step gets a partial-credit label: productive, good, or not yet.
