@@ -6,8 +6,8 @@ This file is for coding assistants and other automated contributors working in t
 
 | Path | Language | Role |
 |---|---|---|
-| `include/mjolnir/`, `src/` | C17 | The M0 library. The reference for every file format. |
-| `tools/` | C17 | `mj_nap`, `mj_nightly`, `mj_ledger_verify`, `mj_store_verify`. |
+| `include/mjolnir/`, `src/` | C17 (one CUDA file) | The library. The reference for every file format. `src/mj_apply_cuda.cu` and `src/mj_lowrank_cuda.cu` are built only with `-DMJ_CUDA=ON`. |
+| `tools/` | C17 | `mj_nap`, `mj_nightly`, `mj_ledger_verify`, `mj_store_verify`, `mj_real`, `mj_m1`, `mj_hemi`. |
 | `tests/`, `tests/fuzz/` | C17 | Unit tests and the built-in fuzzer. |
 | `python/mjolnir/` | Python 3.11+ | The M1 package; `real/` is the real-weight edit path. |
 | `python/tests/` | Python | unittest tests, including C/Python cross-checks. |
@@ -18,7 +18,7 @@ This file is for coding assistants and other automated contributors working in t
 ```
 cmake -S . -B build
 cmake --build build --config Release
-ctest --test-dir build -C Release          # expect 19/19 passing
+ctest --test-dir build -C Release          # expect 31/31 passing (23 without the Python tests)
 cd python && python -m mjolnir --help
 ```
 
@@ -36,6 +36,7 @@ Run the full ctest suite before proposing any change. Add `-DMJ_SANITIZE=ON` for
 8. **Strict parsing.** Refuse malformed input; never guess. Check sizes before use.
 9. **Deterministic M0.** Integer math and a fixed sample order. Do not add floating point or randomness without a fixed seed to M0.
 10. **Nothing edited reaches official runners.** Do not wire Mjolnir output into PCHIE's official runners or records.
+11. **The answer key judges the hemispheres.** A watcher's verdict may only weight a target the answer key backs; never let one model's opinion alone decide what the other learns ([hemispheres](docs/hemispheres.md)).
 
 ## Do
 

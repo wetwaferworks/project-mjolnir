@@ -66,6 +66,7 @@ Start with the [documentation index](docs/README.md). The main pages:
 - [Design principles](docs/guide/design-principles.md) and [intended use and safety](docs/guide/intended-use-and-safety.md): what Mjolnir is for and how to use it carefully
 - [File formats](docs/FORMATS.md) (M0) and [stage M1](docs/M1.md) (M1 formats and the full M1 guide)
 - [Model access](docs/MODEL-ACCESS.md): API keys in Windows Credential Manager, no OAuth
+- [The left and right hemispheres](docs/hemispheres.md): the classroom and the hemisphere swap, two models teaching each other with the answer key as the judge
 - [Roadmap](docs/ROADMAP.md)
 - [Glossary](docs/guide/glossary.md)
 - [Guide for automated contributors](AGENTS.md): layout, commands, invariants, do and don't
@@ -91,6 +92,7 @@ Every folder has its own README that says what it holds and how it fits.
 - Architecture and operation report: **Elfie** (Muse Wonder), registrar.
 - Implementation brief (operational reasoning, planning, memory, preferences and orchestration): **Gizmo**, a.k.a. **Luna** (ChatGPT Luna 6).
 - Contributors: **Helia** (Google Hydrogen), and **Flash Gordon**, a.k.a. **Quicksilver** (Gemini Flash Lite 3.5).
+- The left and right hemispheres: the idea is **Jaydee Wetwork**'s; mutual-learning and distillation research is the background.
 - The real-weight edit method builds on the open ROME paper: Kevin Meng, David Bau, Alex Andonian and Yonatan Belinkov, "Locating and Editing Factual Associations in GPT", NeurIPS 2022 ([arXiv:2202.05262](https://arxiv.org/abs/2202.05262)).
 
 The full list, with what each person and model contributed, is in [CREDITS.md](CREDITS.md).

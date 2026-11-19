@@ -24,7 +24,8 @@ typedef enum mj_status {
     MJ_E_TIMEOUT = 8,   /* a time or step ceiling was reached */
     MJ_E_GATE = 9,      /* a verification gate failed */
     MJ_E_FORBIDDEN = 10,/* refused by a standing gate (M0: live edits) */
-    MJ_E_CHAIN = 11     /* hash chain broken */
+    MJ_E_CHAIN = 11,    /* hash chain broken */
+    MJ_E_BUSY = 12      /* refused: another writer holds the file (its writer token exists) */
 } mj_status;
 
 const char *mj_status_name(mj_status s);

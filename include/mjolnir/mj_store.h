@@ -71,6 +71,9 @@ mj_status mj_store_put(mj_store *s, const char *id, mj_kind kind, const char *pa
 
 mj_status mj_store_info(mj_store *s, const char *id, mj_version_info *out);
 
+/* 1 if the id names a live or retired version (ids are never reused). */
+int mj_store_ever_used(mj_store *s, const char *id);
+
 /* Load a version's payload, checking size, CRC-32 and SHA-256. Free with
  * mj_bfree(s->budget, *data, *n ? *n : 1). */
 mj_status mj_store_get(mj_store *s, const char *id, uint8_t **data, size_t *n);

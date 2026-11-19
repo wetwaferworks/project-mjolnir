@@ -11,6 +11,15 @@ python -m mjolnir real-eval     --original ORIGINAL --working WORKING --data DAT
 python -m mjolnir real-verify   --dir DIR --sums FILE
 ```
 
+The same register, apply and verify steps run in C with `mj_real` (no model code; the apply uses the GPU when built with `-DMJ_CUDA=ON`, else the CPU, with the same bytes):
+
+```
+mj_real register --original ORIGINAL --working WORKING --data DATA_FOLDER
+mj_real apply    --original ORIGINAL --working WORKING --data DATA_FOLDER --version ID [--cpu] [--threads N]
+mj_real verify   --dir DIR --sums FILE
+mj_real status   --working WORKING
+```
+
 1. **Register** checksums every file of the original, copies it, checks the copy byte for byte, marks the original read-only, and pins a base record (MJBASE1) in the store. The working folder must be separate and not a hard link.
 2. **Dream** works out a reward-weighted, low-rank edit to the MLP output projection of the chosen layers, tries each strength in memory only, and stores the strongest passing one as an MJDELTA1 candidate. Nothing is written to the working copy.
 3. **Apply** restores touched tensors to the original bytes, adds the version's deltas oldest first, writes only those tensors, and reads them back. `--version base` rolls back to a byte-for-byte copy of the original.

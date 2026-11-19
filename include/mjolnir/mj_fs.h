@@ -24,19 +24,47 @@ mj_status mj_fs_free_bytes(const char *path, uint64_t *out);
  * to the budget; release it with mj_bfree(b, *out, *len ? *len : 1). */
 mj_status mj_fs_read_all(const char *path, size_t max, mj_budget *b, uint8_t **out, size_t *len);
 
-/* Atomic write: write <path>.tmp, flush it to the disk, then rename it into
- * place and flush the directory. With replace == 0 an existing target is
+/* Atomic write: write <path>.<pid>.<n>.tmp (a name no other writer uses),
+ * flush it to the disk, then rename it into place and flush the directory. With replace == 0 an existing target is
  * refused with MJ_E_EXISTS and nothing changes. */
 mj_status mj_fs_write_atomic(const char *path, const void *data, size_t n, int replace);
 
 /* Durable append: append n bytes and flush them to the disk before returning. */
 mj_status mj_fs_append_durable(const char *path, const void *data, size_t n);
 
+/* Create path only if it does not exist yet (O_EXCL / CREATE_NEW), write n
+ * bytes and flush them to the disk. MJ_E_EXISTS if it is already there. A
+ * symbolic link at path is never followed. This is how writer tokens claim a
+ * file: whoever creates it first holds it. */
+mj_status mj_fs_create_exclusive(const char *path, const void *data, size_t n);
+
+/* Cut a regular file back to size bytes and flush it. Refuses to grow it
+ * (MJ_E_INVAL when size is larger than the file). */
+mj_status mj_fs_truncate(const char *path, uint64_t size);
+
+/* Rename from to to, refusing (MJ_E_EXISTS) when to already exists. */
+mj_status mj_fs_rename_noreplace(const char *from, const char *to);
+
+/* This process: id and an opaque start stamp (0 when the system does not say),
+ * so a reused process id can be told apart from the original process. */
+void mj_proc_self(uint64_t *pid, uint64_t *start);
+/* 1: a process with this id and start stamp is running here; 0: it is not
+ * (gone, or the id now belongs to a different process); -1: cannot tell
+ * (treat as running). A start stamp of 0 matches any process with that id. */
+int mj_proc_running(uint64_t pid, uint64_t start);
+/* Host name as [A-Za-z0-9._-], at most cap-1 chars ("unknown-host" if unset). */
+void mj_host_name(char *out, size_t cap);
+
 /* Calls fn(name, user) for each regular file in dir (no "." or ".."). Stops
  * early when fn returns non-zero. At most max_entries are visited; more is
  * MJ_E_LIMIT. */
 typedef int (*mj_fs_list_fn)(const char *name, void *user);
 mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void *user);
+
+/* Like mj_fs_list, but also visits folders: fn(name, is_dir, user). Symbolic
+ * links, junctions and other special entries are skipped. */
+typedef int (*mj_fs_list_typed_fn)(const char *name, int is_dir, void *user);
+mj_status mj_fs_list_typed(const char *dir, size_t max_entries, mj_fs_list_typed_fn fn, void *user);
 
 /* Monotonic milliseconds, for time ceilings only (never recorded in hashes). */
 uint64_t mj_clock_ms(void);

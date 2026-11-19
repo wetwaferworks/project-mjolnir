@@ -20,10 +20,11 @@ endif()
 
 if(MJ_SANITIZE)
   if(MSVC)
-    add_compile_options(/fsanitize=address /Zi)
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:/fsanitize=address> $<$<COMPILE_LANGUAGE:C>:/Zi>)
     add_link_options(/INCREMENTAL:NO /DEBUG)
   else()
-    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:-fsanitize=address,undefined> $<$<COMPILE_LANGUAGE:C>:-fno-sanitize-recover=all>
+                        $<$<COMPILE_LANGUAGE:C>:-fno-omit-frame-pointer> $<$<COMPILE_LANGUAGE:C>:-g>)
     add_link_options(-fsanitize=address,undefined)
   endif()
 endif()
@@ -37,12 +38,67 @@ set(MJ_SOURCES
   src/mj_score.c
   src/mj_toy.c
   src/mj_synth.c
-  src/mj_dream.c)
-add_library(mjolnir STATIC ${MJ_SOURCES})
-target_include_directories(mjolnir PUBLIC include)
-target_compile_options(mjolnir PRIVATE ${MJ_WARN})
+  src/mj_dream.c
+  src/mj_file.c
+  src/mj_safet.c
+  src/mj_delta.c
+  src/mj_apply.c
+  src/mj_workcopy.c
+  src/mj_session.c
+  src/mj_par.c
+  src/mj_lowrank.c
+  src/mj_json.c
+  src/mj_replay.c
+  src/mj_grades.c
+  src/mj_toytrain.c
+  src/mj_labeler.c
+  src/mj_labeler_page.c
+  src/mj_labeler_net.c
+  src/mj_hemi.c
+  src/mj_classroom.c
+  src/mj_hemi_gate.c)
 
-foreach(tool mj_nap mj_nightly mj_ledger_verify)
+# The GPU path for applying edits to real weights. Off by default; the CPU
+# path gives the same bytes.
+option(MJ_CUDA "Build the CUDA path for applying edits (needs the CUDA toolkit)" OFF)
+if(MJ_CUDA)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 86)
+  endif()
+  enable_language(CXX)
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  set(MJ_GPU_SOURCES src/mj_apply_cuda.cu src/mj_lowrank_cuda.cu src/mj_hemi_cuda.cu)
+else()
+  set(MJ_GPU_SOURCES src/mj_apply_nocuda.c src/mj_lowrank_nocuda.c src/mj_hemi_nocuda.c)
+endif()
+
+add_library(mjolnir STATIC ${MJ_SOURCES} ${MJ_GPU_SOURCES})
+target_include_directories(mjolnir PUBLIC include)
+target_compile_options(mjolnir PRIVATE $<$<COMPILE_LANGUAGE:C>:${MJ_WARN}>)
+if(NOT MSVC)
+  # the apply path's sums must round step by step, never fused
+  target_compile_options(mjolnir PRIVATE $<$<COMPILE_LANGUAGE:C>:-ffp-contract=off>)
+  find_package(Threads REQUIRED)
+  target_link_libraries(mjolnir PUBLIC Threads::Threads m)
+endif()
+if(WIN32)
+  # sockets and the default browser, for the labeling page
+  target_link_libraries(mjolnir PUBLIC ws2_32 shell32)
+endif()
+if(MJ_CUDA)
+  set_source_files_properties(src/mj_apply_cuda.cu src/mj_lowrank_cuda.cu src/mj_hemi_cuda.cu PROPERTIES LANGUAGE CUDA)
+  target_compile_options(mjolnir PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-fmad=false -prec-div=true -prec-sqrt=true -ftz=false>)
+  if(MSVC)
+    # nvcc's generated host stub trips C4211; it is not our code
+    target_compile_options(mjolnir PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/wd4211>)
+  endif()
+  target_link_libraries(mjolnir PUBLIC CUDA::cudart_static CUDA::cublas)
+  target_compile_definitions(mjolnir PUBLIC MJ_HAVE_CUDA=1)
+endif()
+
+foreach(tool mj_nap mj_nightly mj_ledger_verify mj_real mj_m1 mj_hemi)
   add_executable(${tool} tools/${tool}.c)
   target_link_libraries(${tool} PRIVATE mjolnir)
   target_compile_options(${tool} PRIVATE ${MJ_WARN})
@@ -54,7 +110,7 @@ set(MJ_TEST_TMP ${CMAKE_BINARY_DIR}/test-tmp)
 file(MAKE_DIRECTORY ${MJ_TEST_TMP})
 set(MJ_TEST_ENV "MJ_TEST_TMP=${MJ_TEST_TMP}")
 
-foreach(t test_hash test_store test_ledger test_score test_update test_dream)
+foreach(t test_hash test_store test_ledger test_ledger_writer test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank test_replay test_toytrain test_labeler test_hemi)
   add_executable(${t} tests/${t}.c)
   target_link_libraries(${t} PRIVATE mjolnir)
   target_include_directories(${t} PRIVATE tests)
@@ -73,14 +129,20 @@ set_tests_properties(fuzz_builtin PROPERTIES ENVIRONMENT "${MJ_TEST_ENV}" TIMEOU
 
 if(MJ_LIBFUZZER)
   # a second copy of the library with coverage feedback for the fuzzer
-  add_library(mjolnir_fuzz STATIC ${MJ_SOURCES})
+  add_library(mjolnir_fuzz STATIC ${MJ_SOURCES} src/mj_apply_nocuda.c src/mj_lowrank_nocuda.c src/mj_hemi_nocuda.c)
   target_include_directories(mjolnir_fuzz PUBLIC include)
+  if(NOT MSVC)
+    target_link_libraries(mjolnir_fuzz PUBLIC Threads::Threads m)
+  endif()
+  if(WIN32)
+    target_link_libraries(mjolnir_fuzz PUBLIC ws2_32 shell32)
+  endif()
   if(MSVC)
     target_compile_options(mjolnir_fuzz PRIVATE /fsanitize=fuzzer)
   else()
     target_compile_options(mjolnir_fuzz PRIVATE -fsanitize=fuzzer-no-link)
   endif()
-  foreach(ft ledger manifest toy score)
+  foreach(ft ledger manifest toy score safet delta json http hemi)
     add_executable(mj_libfuzz_${ft} tests/fuzz/mj_libfuzzer.c)
     target_link_libraries(mj_libfuzz_${ft} PRIVATE mjolnir_fuzz)
     target_include_directories(mj_libfuzz_${ft} PRIVATE tests/fuzz)
@@ -143,7 +205,7 @@ if(MJ_PYTHON_TESTS)
     endif()
   endif()
   if(MJ_PYTHON)
-    foreach(pt ledger store replay labeler toytrain real)
+    foreach(pt ledger store replay labeler toytrain real c_port c_port_m1)
       add_test(NAME py_${pt} COMMAND ${MJ_PYTHON} -m unittest -v tests.test_${pt}
                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python)
       set_tests_properties(py_${pt} PROPERTIES
@@ -154,3 +216,22 @@ if(MJ_PYTHON_TESTS)
     message(STATUS "Mjolnir: no Python found, the M1 Python tests are not added")
   endif()
 endif()
+
+# The hemispheres on toy policies, end to end: two classroom rounds and two
+# swap rounds into a fresh data folder, then the journal check.
+set(MJ_HEMI_DATA ${MJ_TEST_TMP}/hemi-tool-${CMAKE_BUILD_TYPE})
+add_test(NAME tool_hemi_clean COMMAND ${CMAKE_COMMAND} -E rm -rf ${MJ_HEMI_DATA} ${MJ_HEMI_DATA}-gate)
+add_test(NAME tool_hemi COMMAND mj_hemi pipeline --data ${MJ_HEMI_DATA} --classroom-rounds 2 --rounds 2 --patience 9 --train-mazes 128 --holdout-mazes 512)
+set_tests_properties(tool_hemi PROPERTIES PASS_REGULAR_EXPRESSION "chain OK, 4 records" DEPENDS tool_hemi_clean)
+string(REPEAT "a" 64 MJ_HEX_A)
+string(REPEAT "b" 64 MJ_HEX_B)
+# The gate works out every score itself: a score on the command line is not accepted, a lesson is not holdout
+# evidence, and sets must be bound to the models named. The full rules are tested in test_hemi (test_gate).
+add_test(NAME tool_hemi_gate_no_scores COMMAND mj_hemi gate --data ${MJ_HEMI_DATA}-gate --kind actor --round 1
+         --lesson ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi --holdout ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi
+         --before 100 --after 200 --parent ${MJ_HEX_A} --candidate ${MJ_HEX_B})
+set_tests_properties(tool_hemi_gate_no_scores PROPERTIES PASS_REGULAR_EXPRESSION "usage: mj_hemi" DEPENDS tool_hemi)
+add_test(NAME tool_hemi_gate_refuses COMMAND mj_hemi gate --data ${MJ_HEMI_DATA}-gate --kind actor --round 1
+         --lesson ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi --holdout ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi
+         --parent ${MJ_HEX_A} --candidate ${MJ_HEX_B})
+set_tests_properties(tool_hemi_gate_refuses PROPERTIES PASS_REGULAR_EXPRESSION "refused: holdout set 1 is marked as a lesson set" DEPENDS tool_hemi)
