@@ -6,6 +6,7 @@
 #define MJ_FUZZ_TARGETS_H
 
 #include "mjolnir/mj_delta.h"
+#include "mjolnir/mj_hemi.h"
 #include "mjolnir/mj_json.h"
 #include "mjolnir/mj_labeler.h"
 #include "mjolnir/mj_ledger.h"
@@ -239,6 +240,39 @@ static int mj_fuzz_http(const uint8_t *d, size_t n) {
     MJ_FUZZ_REQUIRE(strstr(r.p, "\r\n\r\n") != NULL);
     mj_jout_free(&r);
     MJ_FUZZ_REQUIRE(b.used == used && (int)s.done.n == done);
+    return 0;
+}
+
+/* A hemisphere sample set (MJHEMI1): a parse that succeeds must give the
+ * very same bytes back, its tallies must add up, the combiner must accept it,
+ * and nothing may be left allocated. */
+static int mj_fuzz_hemi(const uint8_t *d, size_t n) {
+    static mj_budget b;
+    static int ready;
+    mj_hemi_set s;
+    if (!ready) { mj_budget_init(&b, 64u << 20); ready = 1; }
+    if (mj_hemi_parse(d, n, &b, &s) == MJ_OK) {
+        uint8_t *again;
+        size_t m;
+        mj_hemi_tally t;
+        mj_hemi_target *tg;
+        uint32_t nt;
+        mj_hemi_combine_cfg c;
+        const mj_hemi_set *sp[1];
+        MJ_FUZZ_REQUIRE(mj_hemi_encode(&s, &b, &again, &m) == MJ_OK);
+        MJ_FUZZ_REQUIRE(m == n && memcmp(again, d, n) == 0);
+        mj_bfree(&b, again, m);
+        mj_hemi_tally_set(&s, &t);
+        MJ_FUZZ_REQUIRE(t.steps == s.n && t.cleared + t.not_yet <= t.steps);
+        MJ_FUZZ_REQUIRE(t.agree_right + t.agree_wrong + t.object_right + t.object_wrong <= t.steps);
+        mj_hemi_combine_default(&c);
+        sp[0] = &s;
+        MJ_FUZZ_REQUIRE(mj_hemi_combine(sp, 1, &c, &b, &tg, &nt) == MJ_OK);
+        MJ_FUZZ_REQUIRE(nt <= 2u * s.n);
+        if (tg) mj_bfree(&b, tg, (size_t)2u * s.n * sizeof *tg);
+        mj_hemi_set_free(&s);
+    }
+    MJ_FUZZ_REQUIRE(b.used == 0);
     return 0;
 }
 

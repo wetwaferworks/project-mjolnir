@@ -82,6 +82,8 @@ static void reseal(size_t t, uint8_t *b, size_t n) {
                 break;
             }
         }
+    } else if (t == 8 && n >= 32) { /* a hemisphere sample set's trailing hash */
+        mj_sha256(b, n - 32, b + n - 32);
     } else if (t == 5 && n >= 64) { /* a delta's trailing hash */
         mj_sha256(b, n - 32, b + n - 32);
     } else if (t == 2 && n == MJ_TOY_BLOB_LEN) {
@@ -97,7 +99,7 @@ typedef struct target {
     size_t seed_len;
 } target;
 
-#define N_TARGETS 8
+#define N_TARGETS 9
 static target T[N_TARGETS];
 
 static void seeds(void) {
@@ -116,6 +118,35 @@ static void seeds(void) {
     T[5].name = "delta"; T[5].fn = mj_fuzz_delta;
     T[6].name = "json"; T[6].fn = mj_fuzz_json;
     T[7].name = "http"; T[7].fn = mj_fuzz_http;
+    T[8].name = "hemi"; T[8].fn = mj_fuzz_hemi;
+    { /* a real sample set: one pass of two toy hemispheres over a few corridors */
+        mj_budget hb;
+        mj_hemi_toy_world w;
+        mj_toy_model teacher;
+        mj_hemi_toy lt, rt;
+        mj_hemi_model lm, rm;
+        mj_hemi_header h;
+        mj_hemi_set hs;
+        uint8_t *hp;
+        size_t hn;
+        mj_budget_init(&hb, 16u << 20);
+        mj_hemi_toy_teacher(1, &teacher);
+        (void)mj_hemi_toy_parents("complement", 1, &teacher, &lt.m, &rt.m);
+        (void)mj_hemi_toy_bind(&lt, "left", &lm);
+        (void)mj_hemi_toy_bind(&rt, "right", &rm);
+        memset(&h, 0, sizeof h);
+        h.round = 1; h.pass = 1; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
+        h.n_features = MJ_TOY_F; h.n_actions = MJ_TOY_A; h.seed = 5;
+        mj_hemi_set_init(&hs, &hb, &h);
+        if (mj_hemi_toy_world_make(5, 12, 8, &teacher, &hb, &w) == MJ_OK) {
+            if (mj_hemi_toy_pass(&w, &lm, &rm, &hs) == MJ_OK && mj_hemi_encode(&hs, &hb, &hp, &hn) == MJ_OK) {
+                if (hn <= BUF_MAX) { memcpy(T[8].seed, hp, hn); T[8].seed_len = hn; }
+                mj_bfree(&hb, hp, hn);
+            }
+            mj_hemi_toy_world_free(&w);
+        }
+        mj_hemi_set_free(&hs);
+    }
     {
         static const char req[] =
             "POST /api/grade HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nX-Mjolnir: 1\r\nContent-Type: application/json\r\n"

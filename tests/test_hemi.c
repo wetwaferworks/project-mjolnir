@@ -1,0 +1,340 @@
+/* The left and right hemispheres: verdicts, the MJHEMI1 format, the
+ * combiner, the merge, training, whole toy rounds (kept, rolled back,
+ * repeatable) and the CPU/GPU batch scorer.
+ * MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works. */
+#include "mj_test.h"
+
+#include "mjolnir/mj_fs.h"
+#include "mjolnir/mj_hemi.h"
+#include "mjolnir/mj_ledger.h"
+
+static void probs4(uint16_t p[MJ_HEMI_MAX_ACTIONS], uint16_t a, uint16_t b, uint16_t c, uint16_t d) {
+    memset(p, 0, MJ_HEMI_MAX_ACTIONS * sizeof p[0]);
+    p[0] = a; p[1] = b; p[2] = c; p[3] = d;
+}
+
+static void test_judge(void) {
+    uint16_t p[MJ_HEMI_MAX_ACTIONS];
+    mj_hemi_verdict v;
+    probs4(p, 40000, 20000, 5535, 0);
+    CHECK_EQ(mj_hemi_pick(p, 4, 0xF), 0u);
+    CHECK_EQ(mj_hemi_pick(p, 4, 0xE), 1u);         /* move 0 not legal */
+    CHECK_EQ(mj_hemi_pick(p, 4, 0x0), MJ_HEMI_MAX_ACTIONS);
+    mj_hemi_judge(p, 4, 0xF, 0, &v);
+    CHECK(v.reason == MJ_HEMI_AGREE && v.choice == 0);
+    CHECK_EQ(v.score_bp, (int16_t)((20000 * 10000) / 65535));
+    CHECK_EQ(v.confidence_bp, (uint16_t)((20000 * 10000) / 65535));
+    mj_hemi_judge(p, 4, 0xF, 2, &v);
+    CHECK(v.reason == MJ_HEMI_PREFER_OTHER && v.choice == 0 && v.score_bp < 0);
+    mj_hemi_judge(p, 4, 0xB, 2, &v);                /* move 2 not legal */
+    CHECK(v.reason == MJ_HEMI_ILLEGAL && v.score_bp == -10000);
+    probs4(p, 33000, 32535, 0, 0);
+    mj_hemi_judge(p, 4, 0xF, 1, &v);                /* a 465 / 65535 margin: unsure */
+    CHECK(v.reason == MJ_HEMI_UNSURE && v.choice == 0);
+    probs4(p, 30000, 30000, 5535, 0);               /* ties go to the lower move */
+    CHECK_EQ(mj_hemi_pick(p, 4, 0xF), 0u);
+}
+
+static void sample_set(mj_hemi_set *s, mj_budget *b, uint32_t n) {
+    mj_hemi_header h;
+    uint32_t i;
+    memset(&h, 0, sizeof h);
+    h.round = 7; h.pass = 2; h.actor_side = MJ_HEMI_RIGHT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
+    h.n_features = 8; h.n_actions = 4; h.seed = 0x0123456789ABCDEFull;
+    memset(h.actor, 0xA1, sizeof h.actor);
+    memset(h.observer, 0xB2, sizeof h.observer);
+    mj_hemi_set_init(s, b, &h);
+    for (i = 0; i < n; ++i) {
+        mj_hemi_record r;
+        uint32_t f;
+        memset(&r, 0, sizeof r);
+        r.episode = i / 3; r.step = (uint16_t)(i % 3);
+        for (f = 0; f < 8; ++f) r.features[f] = (int8_t)(i * 7 + f * 13 - 100);
+        probs4(r.actor_probs, (uint16_t)(30000 + i), 20000, (uint16_t)(15535 - i), 0);
+        probs4(r.watcher_probs, 10000, 50000, 5535, 0);
+        r.actor_move = 0;
+        mj_hemi_judge(r.watcher_probs, 4, 0xF, 0, &r.verdict);
+        r.grade = (uint8_t)(i % 3 == 2 ? MJ_CREDIT_NOT_YET : MJ_CREDIT_SUCCESS);
+        CHECK_ST(mj_hemi_set_add(s, &r), MJ_OK);
+    }
+}
+
+static void test_format(void) {
+    mj_budget b;
+    mj_hemi_set s, t, u;
+    uint8_t *buf, *buf2;
+    size_t n, n2, i;
+    uint32_t bad = 0;
+    mj_hemi_record r;
+    mj_budget_init(&b, 64u << 20);
+    sample_set(&s, &b, 30);
+    CHECK_ST(mj_hemi_encode(&s, &b, &buf, &n), MJ_OK);
+    CHECK_EQ(n, (size_t)(MJ_HEMI_HEADER_BYTES + 30u * (14u + 8u + 16u) + MJ_HEMI_TRAILER_BYTES));
+    CHECK_ST(mj_hemi_parse(buf, n, &b, &t), MJ_OK);
+    CHECK(t.n == 30 && t.h.round == 7 && t.h.pass == 2 && t.h.seed == 0x0123456789ABCDEFull);
+    CHECK(memcmp(t.r, s.r, 30 * sizeof *s.r) == 0);
+    CHECK_ST(mj_hemi_encode(&t, &b, &buf2, &n2), MJ_OK); /* the same bytes back */
+    CHECK(n2 == n && memcmp(buf, buf2, n) == 0);
+    mj_bfree(&b, buf2, n2);
+    /* every flipped bit and every truncation is refused */
+    for (i = 0; i < n; ++i) {
+        buf[i] ^= 0x10;
+        if (mj_hemi_parse(buf, n, &b, &u) == MJ_OK) { ++bad; mj_hemi_set_free(&u); }
+        buf[i] ^= 0x10;
+    }
+    CHECK_EQ(bad, 0u);
+    for (i = 0; i < n; i += 7)
+        if (mj_hemi_parse(buf, i, &b, &u) == MJ_OK) { ++bad; mj_hemi_set_free(&u); }
+    CHECK_EQ(bad, 0u);
+    /* fields that pass the checksum but break the rules: re-seal and refuse */
+    {
+        static const size_t at[] = {8, 10, 16, 17, 18, 19, 20, 21, 68, 80, 96 + 6, 96 + 7, 96 + 8, 96 + 9, 96 + 13};
+        static const uint8_t val[] = {2, 95, 3, 2, 9, 65, 17, 1, 99, 1, 4, 0, 4, 5, 0x40};
+        size_t k;
+        for (k = 0; k < sizeof at / sizeof at[0]; ++k) {
+            uint8_t keep = buf[at[k]];
+            buf[at[k]] = val[k];
+            mj_sha256(buf, n - 32, buf + n - 32);
+            if (mj_hemi_parse(buf, n, &b, &u) == MJ_OK) { ++bad; mj_hemi_set_free(&u); fprintf(stderr, "accepted byte %u\n", (unsigned)at[k]); }
+            buf[at[k]] = keep;
+        }
+        mj_sha256(buf, n - 32, buf + n - 32);
+        CHECK_EQ(bad, 0u);
+        CHECK_ST(mj_hemi_parse(buf, n, &b, &u), MJ_OK);
+        mj_hemi_set_free(&u);
+    }
+    /* records out of order are refused */
+    r = s.r[3];
+    CHECK_ST(mj_hemi_set_add(&s, &r), MJ_E_INVAL);
+    /* probabilities that do not add up are refused */
+    r = s.r[29];
+    r.step = 99;
+    r.actor_probs[0] = 1;
+    CHECK_ST(mj_hemi_set_add(&s, &r), MJ_E_INVAL);
+    r.actor_probs[0] = s.r[29].actor_probs[0];
+    r.features[9] = 1; /* past n_features */
+    CHECK_ST(mj_hemi_set_add(&s, &r), MJ_E_INVAL);
+    mj_bfree(&b, buf, n);
+    mj_hemi_set_free(&s);
+    mj_hemi_set_free(&t);
+    CHECK_EQ(b.used, (size_t)0);
+}
+
+static void test_combine(void) {
+    mj_budget b;
+    mj_hemi_set s;
+    const mj_hemi_set *sp[1];
+    mj_hemi_target *t;
+    uint32_t n, i, from_watcher = 0, neg = 0, pos = 0;
+    mj_hemi_combine_cfg c;
+    mj_budget_init(&b, 64u << 20);
+    sample_set(&s, &b, 30); /* every third step failed; the watcher always prefers move 1 */
+    sp[0] = &s;
+    mj_hemi_combine_default(&c);
+    CHECK_ST(mj_hemi_combine(sp, 1, &c, &b, &t, &n), MJ_OK);
+    for (i = 0; i < n; ++i) {
+        if (t[i].from_watcher) { ++from_watcher; CHECK(t[i].move == 1 && t[i].weight >= 0.0f); }
+        else if (t[i].weight < 0) ++neg;
+        else ++pos;
+    }
+    CHECK_EQ(pos, 20u);
+    CHECK_EQ(neg, 10u);
+    /* the watcher objected 30 times and was right 10 times: trust 2*10/30-1 < 0, nothing from it */
+    CHECK_EQ(from_watcher, 0u);
+    mj_bfree(&b, t, (size_t)60 * sizeof *t);
+    /* make the watcher earn trust: it objects only where the key fails */
+    for (i = 0; i < s.n; ++i)
+        if (s.r[i].grade == MJ_CREDIT_SUCCESS) {
+            probs4(s.r[i].watcher_probs, 50000, 10000, 5535, 0);
+            mj_hemi_judge(s.r[i].watcher_probs, 4, 0xF, 0, &s.r[i].verdict);
+        }
+    CHECK_ST(mj_hemi_combine(sp, 1, &c, &b, &t, &n), MJ_OK);
+    for (i = 0, from_watcher = 0; i < n; ++i) from_watcher += t[i].from_watcher;
+    CHECK_EQ(from_watcher, 10u);
+    mj_bfree(&b, t, (size_t)60 * sizeof *t);
+    c.watcher_weight = 0.0f;
+    CHECK_ST(mj_hemi_combine(sp, 1, &c, &b, &t, &n), MJ_OK);
+    CHECK_EQ(n, 30u);
+    mj_bfree(&b, t, (size_t)60 * sizeof *t);
+    mj_hemi_set_free(&s);
+    CHECK_EQ(b.used, (size_t)0);
+}
+
+static void test_merge_train(void) {
+    mj_toy_model a, c, m, x, y;
+    mj_hemi_train_cfg tc;
+    mj_hemi_target t[3];
+    float loss;
+    uint32_t i, f;
+    mj_hemi_toy_teacher(5, &a);
+    mj_hemi_toy_teacher(6, &c);
+    mj_hemi_toy_merge(&a, &c, 0, &m);
+    CHECK(memcmp(&m, &a, sizeof m) == 0);
+    mj_hemi_toy_merge(&a, &c, 65536, &m);
+    CHECK(memcmp(&m, &c, sizeof m) == 0);
+    mj_hemi_toy_merge(&a, &c, 32768, &m);
+    for (i = 0; i < MJ_TOY_A; ++i)
+        for (f = 0; f < MJ_TOY_F; ++f) {
+            int64_t lo = a.w[i][f] < c.w[i][f] ? a.w[i][f] : c.w[i][f];
+            int64_t hi = a.w[i][f] < c.w[i][f] ? c.w[i][f] : a.w[i][f];
+            CHECK(m.w[i][f] >= lo && m.w[i][f] <= hi);
+        }
+    memset(t, 0, sizeof t);
+    for (i = 0; i < 3; ++i) {
+        t[i].features[i] = 100;
+        t[i].features[7] = 64;
+        t[i].move = (uint8_t)i;
+        t[i].weight = i == 2 ? -0.5f : 1.0f;
+    }
+    mj_hemi_train_default(&tc);
+    tc.step_cap = 0.25f;
+    CHECK_ST(mj_hemi_toy_train(&a, t, 3, &tc, &x, &loss), MJ_OK);
+    CHECK_ST(mj_hemi_toy_train(&a, t, 3, &tc, &y, &loss), MJ_OK);
+    CHECK(memcmp(&x, &y, sizeof x) == 0); /* same seed, same weights */
+    for (i = 0; i < MJ_TOY_A; ++i)
+        for (f = 0; f < MJ_TOY_F; ++f) CHECK(llabs((long long)x.w[i][f] - a.w[i][f]) <= 16384 + 1);
+    tc.step_cap = 4.0f; /* room to learn: the two positive targets win */
+    CHECK_ST(mj_hemi_toy_train(&a, t, 3, &tc, &y, &loss), MJ_OK);
+    CHECK(mj_toy_act(&y, t[0].features) == 0 && mj_toy_act(&y, t[1].features) == 1);
+    CHECK_ST(mj_hemi_toy_train(&a, NULL, 0, &tc, &y, &loss), MJ_OK); /* no targets: unchanged */
+    CHECK(memcmp(&a, &y, sizeof a) == 0);
+    tc.batch = 0;
+    CHECK_ST(mj_hemi_toy_train(&a, t, 3, &tc, &y, &loss), MJ_E_INVAL);
+}
+
+static void run_rounds(const char *name, const char *scenario, uint32_t rounds, uint8_t final_sha[2][32],
+                       uint32_t *kept, int gpu) {
+    char dir[MJ_PATH_MAX], ledger[MJ_PATH_MAX], sub[MJ_PATH_MAX];
+    mj_toy_model teacher, left, right;
+    mj_budget b;
+    uint32_t r;
+    uint8_t blob[MJ_TOY_BLOB_LEN];
+    mj_ledger_state ls;
+    uint64_t bad;
+    mj_t_dir(dir, sizeof dir, name);
+    for (r = 1; r <= rounds; ++r) { /* clean an earlier run */
+        char rn[16];
+        snprintf(rn, sizeof rn, "round-%03u", (unsigned)r);
+        if (mj_path_join(sub, sizeof sub, dir, rn) == MJ_OK) mj_t_clean(sub);
+    }
+    mj_t_clean(dir);
+    snprintf(ledger, sizeof ledger, "%s/hemispheres.mjl", dir);
+    (void)mj_fs_remove(ledger);
+    mj_budget_init(&b, 256u << 20);
+    mj_hemi_toy_teacher(1, &teacher);
+    CHECK_ST(mj_hemi_toy_parents(scenario, 1, &teacher, &left, &right), MJ_OK);
+    *kept = 0;
+    for (r = 1; r <= rounds; ++r) {
+        mj_hemi_round_cfg c;
+        mj_hemi_round_report rep;
+        memset(&c, 0, sizeof c);
+        c.round = r;
+        c.train_seed = 1000003ull + r;
+        c.holdout_seed = 1500003ull + r;
+        c.train_mazes = 256;
+        c.holdout_mazes = 1024;
+        c.segments = 16;
+        c.use_gpu = gpu;
+        mj_hemi_combine_default(&c.combine);
+        mj_hemi_train_default(&c.train);
+        c.train.seed = c.train_seed;
+        CHECK_ST(mj_hemi_toy_round(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
+        if (rep.kept) {
+            ++*kept;
+            CHECK(rep.child_holdout_bp > rep.left_holdout_bp && rep.child_holdout_bp > rep.right_holdout_bp);
+        }
+    }
+    CHECK_ST(mj_ledger_verify_file(ledger, &b, &ls, &bad), MJ_OK);
+    CHECK_EQ(ls.count, (uint64_t)rounds);
+    CHECK_ST(mj_toy_save(&left, blob), MJ_OK);
+    mj_sha256(blob, sizeof blob, final_sha[0]);
+    CHECK_ST(mj_toy_save(&right, blob), MJ_OK);
+    mj_sha256(blob, sizeof blob, final_sha[1]);
+    CHECK_EQ(b.used, (size_t)0);
+}
+
+static void test_rounds(void) {
+    uint8_t a[2][32], c[2][32];
+    uint32_t ka, kc;
+    run_rounds("hemi_a", "complement", 3, a, &ka, 0);
+    run_rounds("hemi_b", "complement", 3, c, &kc, 0);
+    CHECK(memcmp(a, c, sizeof a) == 0); /* repeatable, bit for bit */
+    CHECK(ka == kc && ka >= 1);
+    printf("complement: %u of 3 rounds kept\n", (unsigned)ka);
+    run_rounds("hemi_t", "ternary", 3, a, &ka, 0);
+    printf("ternary: %u of 3 rounds kept\n", (unsigned)ka);
+    if (mj_hemi_gpu_built()) {
+        run_rounds("hemi_g", "ternary", 3, c, &kc, 1);
+        CHECK(memcmp(a, c, sizeof a) == 0 && ka == kc); /* the GPU scorer changes nothing */
+    }
+}
+
+static void test_rollback(void) {
+    /* identical parents and no learning: the child equals them and cannot
+     * beat them, so the round rolls back and the parents come back intact */
+    char dir[MJ_PATH_MAX], ledger[MJ_PATH_MAX];
+    mj_toy_model teacher, left, right, l0;
+    mj_budget b;
+    mj_hemi_round_cfg c;
+    mj_hemi_round_report rep;
+    mj_ledger_state ls;
+    uint64_t bad;
+    mj_t_dir(dir, sizeof dir, "hemi_rb");
+    mj_t_clean(dir);
+    snprintf(ledger, sizeof ledger, "%s/hemispheres.mjl", dir);
+    (void)mj_fs_remove(ledger);
+    mj_budget_init(&b, 256u << 20);
+    mj_hemi_toy_teacher(9, &teacher);
+    CHECK_ST(mj_hemi_toy_parents("ternary", 9, &teacher, &left, &right), MJ_OK);
+    right = left;
+    l0 = left;
+    memset(&c, 0, sizeof c);
+    c.round = 1; c.train_seed = 11; c.holdout_seed = 12; c.train_mazes = 64; c.holdout_mazes = 256; c.segments = 8;
+    mj_hemi_combine_default(&c.combine);
+    mj_hemi_train_default(&c.train);
+    c.train.steps = 0;
+    CHECK_ST(mj_hemi_toy_round(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
+    CHECK(!rep.kept);
+    CHECK(memcmp(&left, &l0, sizeof l0) == 0 && memcmp(&right, &l0, sizeof l0) == 0);
+    CHECK_ST(mj_ledger_verify_file(ledger, &b, &ls, &bad), MJ_OK);
+    CHECK(ls.count == 1 && strcmp(ls.last.outcome, "rolled-back") == 0);
+    CHECK_EQ(b.used, (size_t)0);
+}
+
+static void test_gpu_parity(void) {
+    enum { N = 100003 };
+    static int8_t states[(size_t)N * MJ_TOY_F];
+    static uint8_t cpu[(size_t)N * 3], gpu[(size_t)N * 3];
+    mj_toy_model m[3];
+    uint64_t s = 3;
+    uint32_t i, diff = 0;
+    char err[128];
+    for (i = 0; i < (uint32_t)N * MJ_TOY_F; ++i) states[i] = (int8_t)(mj_hemi_next(&s) & 0xFF);
+    for (i = 0; i < 3; ++i) mj_hemi_toy_teacher(40 + i, &m[i]);
+    m[2] = m[1];
+    m[2].w[3][0] = m[2].w[2][0]; /* make ties happen */
+    CHECK_ST(mj_hemi_toy_act_batch_cpu(m, 3, states, N, cpu), MJ_OK);
+    if (!mj_hemi_gpu_built()) {
+        CHECK_ST(mj_hemi_toy_act_batch_gpu(m, 3, states, N, gpu, err), MJ_E_INVAL);
+        printf("gpu parity: built without CUDA, skipped\n");
+        return;
+    }
+    if (mj_hemi_toy_act_batch_gpu(m, 3, states, N, gpu, err) != MJ_OK) {
+        printf("gpu parity: %s, skipped\n", err);
+        return;
+    }
+    for (i = 0; i < (uint32_t)N * 3; ++i) diff += cpu[i] != gpu[i];
+    CHECK_EQ(diff, 0u);
+    printf("gpu parity: %u moves, %u differ\n", (unsigned)(N * 3), (unsigned)diff);
+}
+
+int main(void) {
+    test_judge();
+    test_format();
+    test_combine();
+    test_merge_train();
+    test_rounds();
+    test_rollback();
+    test_gpu_parity();
+    return mj_t_done("test_hemi");
+}
