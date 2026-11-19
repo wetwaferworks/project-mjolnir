@@ -369,9 +369,19 @@ mj_status mj_ledger_writer_release(mj_ledger_writer *w) {
         w->held = 0;
         return MJ_E_FORBIDDEN; /* not ours any more: leave it alone */
     }
-    s = mj_fs_remove(w->token_path);
-    if (s == MJ_OK) w->held = 0;
-    return s;
+    /* Rename first, then delete: the token's name is free the moment the rename lands, even if a reader still has
+     * the file open (on Windows a plain delete would leave the name taken until the last reader closes it). */
+    {
+        char gone[MJ_PATH_MAX];
+        const char *nonce = w->token + w->token_len - 33; /* the 32 hex digits before the newline */
+        int k = snprintf(gone, sizeof gone, "%s.released-%.32s", w->token_path, nonce);
+        if (k <= 0 || (size_t)k >= sizeof gone || (size_t)k >= MJ_PATH_MAX) return MJ_E_LIMIT;
+        s = mj_fs_rename_noreplace(w->token_path, gone);
+        if (s != MJ_OK) return s;
+        w->held = 0;
+        (void)mj_fs_remove(gone); /* best effort; the name that matters is already free */
+        return MJ_OK;
+    }
 }
 
 mj_status mj_ledger_writer_release_stale(const char *ledger, mj_ledger_holder *h, char *moved_to, size_t moved_cap) {

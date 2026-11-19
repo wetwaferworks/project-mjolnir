@@ -102,7 +102,10 @@ mj_status mj_fs_read_all(const char *path, size_t max, mj_budget *b, uint8_t **o
     WPATH(w, path);
     *out = NULL;
     *len = 0;
-    h = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    /* A reader shares everything: a writer appending, or a writer token being released by rename, must never fail
+     * because someone is reading (the bytes read are the ones there when the size was taken). */
+    h = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return win_absent() ? MJ_E_NOTFOUND : MJ_E_IO;
     if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0) { CloseHandle(h); return MJ_E_IO; }
     if ((uint64_t)sz.QuadPart > (uint64_t)max) { CloseHandle(h); return MJ_E_LIMIT; }
