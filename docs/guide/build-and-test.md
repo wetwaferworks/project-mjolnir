@@ -4,14 +4,14 @@
 
 | Option | Default | Effect |
 |---|---|---|
-| `MJ_CUDA` | `OFF` | Build the GPU path for applying real-weight edits (`src/mj_apply_cuda.cu`, CUDA toolkit needed; `CMAKE_CUDA_ARCHITECTURES` defaults to 86). Without it the CPU path runs, with the same bytes. |
+| `MJ_CUDA` | `OFF` | Build the GPU paths for applying real-weight edits and for the low-rank edit's big products (`src/mj_apply_cuda.cu`, `src/mj_lowrank_cuda.cu` with cuBLAS; CUDA toolkit needed; `CMAKE_CUDA_ARCHITECTURES` defaults to 86). Without it the CPU path runs, with the same bytes. |
 | `MJ_SANITIZE` | `OFF` | AddressSanitizer everywhere, plus UndefinedBehaviorSanitizer on GCC and Clang. With MSVC, the ASan runtime DLL is copied beside the test programs. |
 | `MJ_LIBFUZZER` | `OFF` | Also build libFuzzer targets (`mj_libfuzz_ledger`, `_manifest`, `_toy`, `_score`, `_safet`, `_delta`) when the compiler supports `-fsanitize=fuzzer`. |
 | `MJ_FUZZ_ITERATIONS` | `100000` | Inputs per target for the built-in fuzz test. |
 | `MJ_PYTHON_TESTS` | `ON` | Add the Python tests to ctest. |
 | `MJ_PYTHON` | (found) | The interpreter for the Python tests. Point it at one with `torch` and `numpy` to run the GPU and real-weight tests. |
 
-## The test bench (23 ctest cases)
+## The test bench (24 ctest cases)
 
 | Test | What it checks |
 |---|---|
@@ -23,11 +23,12 @@
 | `test_dream` | The nightly driver and the nap entry point end to end, dry run only. |
 | `test_safet` | The safetensors header reader: offsets inside the file, sizes matching shapes, no overlaps, no name twice, strict JSON. |
 | `test_delta` | MJDELTA1 pack and unpack, each refusal, and the scale written as Python's `repr()` writes it. |
+| `test_lowrank` | The low-rank edit against textbook formulas on small sizes, the truncation error, refusals, and cuBLAS against the CPU. |
 | `test_workcopy` | The real-weight path in C on a small synthetic model: register, apply, roll back byte for byte, the dirty marker, refusals, and the CPU and GPU apply giving the same bytes. |
 | `fuzz_builtin` | The built-in deterministic fuzzer over the ledger, manifest, toy, score, safetensors-header and delta parsers. |
 | `tool_clean`, `tool_nap`, `tool_nightly`, `tool_ledger_verify` | The tools end to end on a scratch store. |
 | `tool_refuses_live`, `tool_refuses_no_dry_run` | The tools refuse `--live` and refuse to run without `--dry-run` (expected to fail, so they pass when refused). |
-| `py_ledger`, `py_store`, `py_replay`, `py_labeler`, `py_toytrain`, `py_real`, `py_c_port` | The Python modules, 40 tests in all, including the C tools reading Python-written stores and ledgers, and `py_c_port`: the C port against Python (delta bytes, store, state and ledger records, the edited weights). `py_toytrain` and `py_real` need `torch` and `numpy` and are skipped without them. The real-weight tests use small synthetic models, never a real download. |
+| `py_ledger`, `py_store`, `py_replay`, `py_labeler`, `py_toytrain`, `py_real`, `py_c_port` | The Python modules, 41 tests in all, including the C tools reading Python-written stores and ledgers, and `py_c_port`: the C port against Python (delta bytes, store, state and ledger records, the edited weights, the low-rank edit). `py_toytrain` and `py_real` need `torch` and `numpy` and are skipped without them. The real-weight tests use small synthetic models, never a real download. |
 
 Test scratch files go in `build/test-tmp/` (set by `MJ_TEST_TMP`).
 

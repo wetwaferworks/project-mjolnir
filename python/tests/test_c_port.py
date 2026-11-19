@@ -66,6 +66,11 @@ def bf16_steps(a, b):
 
 
 @unittest.skipUnless(has_torch() and tool("mj_real"), "needs torch, numpy and the C tools")
+
+def slurp(path):
+    with open(path, "rb") as f:
+        return f.read()
+
 class CPortParity(unittest.TestCase):
     def setUp(self):
         self.real = tool("mj_real")
@@ -136,7 +141,7 @@ class CPortParity(unittest.TestCase):
         self.assertEqual(pst.info("base")["kind"], cst.info("base")["kind"])
         self.assertEqual(pst.info("base")["label"], cst.info("base")["label"])
         for f in ("MJOLNIR-STATE.txt", MF, "config.json"):
-            self.assertEqual(open(os.path.join(pw, f), "rb").read(), open(os.path.join(cw, f), "rb").read(), f)
+            self.assertEqual(slurp(os.path.join(pw, f)), slurp(os.path.join(cw, f)), f)
 
         # the same deltas into all three stores
         g = torch.Generator().manual_seed(7)
@@ -158,11 +163,11 @@ class CPortParity(unittest.TestCase):
         self.assertEqual(code, 0, gout)
         print("\n  C apply (GPU run): " + gout.strip().replace("\n", " | "))
 
-        self.assertEqual(open(os.path.join(pw, "MJOLNIR-STATE.txt"), "rb").read(),
-                         open(os.path.join(cw, "MJOLNIR-STATE.txt"), "rb").read())
+        self.assertEqual(slurp(os.path.join(pw, "MJOLNIR-STATE.txt")),
+                         slurp(os.path.join(cw, "MJOLNIR-STATE.txt")))
         h, _ = safet.read_header(os.path.join(pw, MF))
         total_diff, worst, total = 0, 0, 0
-        pf, cf, gf = (open(os.path.join(w, MF), "rb").read() for w in (pw, cw, gw))
+        pf, cf, gf = (slurp(os.path.join(w, MF)) for w in (pw, cw, gw))
         self.assertEqual(cf, gf, "the CPU and GPU paths must give the same bytes")
         self.assertEqual(pf[:h[NAMES[0]]["abs_offset"]], cf[:h[NAMES[0]]["abs_offset"]])
         for name, info in sorted(h.items()):
@@ -216,6 +221,56 @@ class CPortParity(unittest.TestCase):
         code, out = self.c("verify", "--dir", cw, "--sums", sums)
         self.assertEqual(code, 1)
         self.assertTrue(out.startswith("MISMATCH: "), out)
+
+    # ---- the low-rank edit ----
+    def test_low_rank(self):
+        import json
+        import numpy as np
+        import torch
+        from mjolnir.real import edit
+        g = torch.Generator().manual_seed(21)
+        n, out, d, m = 24, 160, 384, 300
+        k = torch.randn(n, d, generator=g)
+        o = torch.randn(n, out, generator=g) * 3
+        gr = torch.randn(n, out, generator=g) * 0.01
+        bg = torch.randn(m, d, generator=g) * torch.linspace(0.2, 2.0, d)  # uneven directions
+        grads = {"k": list(k), "o": list(o), "g": list(gr)}
+
+        def save(path, tensors):
+            header, blobs, off = {}, [], 0
+            for name, t in tensors.items():
+                b = t.contiguous().numpy().astype("<f4").tobytes()
+                header[name] = {"dtype": "F32", "shape": list(t.shape), "data_offsets": [off, off + len(b)]}
+                blobs.append(b)
+                off += len(b)
+            h = json.dumps(header).encode()
+            with open(path, "wb") as f:
+                f.write(struct.pack("<Q", len(h)) + h + b"".join(blobs))
+
+        def load(path):
+            raw = slurp(path)
+            hl = struct.unpack("<Q", raw[:8])[0]
+            h = json.loads(raw[8:8 + hl])
+            return {name: torch.from_numpy(np.frombuffer(raw, dtype="<f4", count=int(np.prod(t["shape"])),
+                                                         offset=8 + hl + t["data_offsets"][0]).copy()).reshape(t["shape"])
+                    for name, t in h.items()}
+
+        for label, background, rank, extra in (("plain", None, 8, []), ("whitened", bg, 8, ["--shared", "64"]),
+                                               ("whitened, full rank", bg, n, ["--shared", "64"])):
+            U, V = edit.low_rank(grads, rank, None if background is None else edit.with_shared_key(background, grads["k"]))
+            want = (U.double() @ V.double())
+            inp = os.path.join(self.d, "lr-in-%s.safetensors" % label.replace(" ", "").replace(",", ""))
+            save(inp, {"k": k, "o": o, "g": gr, **({} if background is None else {"background": background})})
+            for dev in ([], ["--cpu"]):
+                outp = inp.replace("lr-in", "lr-out" + "".join(dev))
+                code, msg = self.c("lowrank", inp, outp, "--rank", str(rank), *extra, *dev)
+                self.assertEqual(code, 0, msg)
+                got = load(outp)
+                prod = got["U"].double() @ got["V"].double()
+                err = float((prod - want).norm() / want.norm())
+                print("\n  low rank (%s, rank %d, %s): relative difference from Python %.2e; %s"
+                      % (label, rank, "CPU" if dev else "GPU if present", err, msg.strip()))
+                self.assertLess(err, 1e-4)
 
     def test_refusals_match(self):
         from mjolnir.real import session

@@ -20,5 +20,7 @@ Public C headers for the M0 library, under `include/mjolnir/`. Each header has a
 | `mj_apply.h` | Adding a chain of low-rank edits to one bf16 tensor, on the CPU or the GPU, with the same bytes either way. |
 | `mj_workcopy.h` | Checksums, the working copy, its state file and dirty marker, and checkout. |
 | `mj_session.h` | Register and apply, recorded in the real-weight ledger. |
+| `mj_lowrank.h` | The low-rank edit from keys, outputs and gradients: whitening, QR, SVD, truncation; cuBLAS for the big products. |
+| `mj_par.h` | Splitting a loop across threads and joining them, with no locks. |
 
 File formats are specified in [docs/FORMATS.md](../docs/FORMATS.md).

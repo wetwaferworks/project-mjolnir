@@ -2,8 +2,8 @@
 
 Mjolnir's Python code is being moved to C (and CUDA where the GPU helps), one
 module at a time, with the same file formats. A Python module stays until its
-C replacement has passed parity tests against it; only then can it go, and
-that call is JD's.
+C replacement has passed parity tests against it; only then can it be
+considered for removal, and that is a separate, explicit decision.
 
 ## Where it stands
 
@@ -14,7 +14,8 @@ that call is JD's.
 | `real/workcopy.py` (checksums, copy, state, checkout) | `mj_workcopy.h`, `mj_apply.h` | Ported, with a dirty marker for in-place writes. The apply runs on the GPU when built with `-DMJ_CUDA=ON`. |
 | `real/session.py`: `register`, `apply`, `base_sha`; `real-verify` | `mj_session.h`, `mj_real` | Ported. Same store records, state file and ledger fields. |
 | `store.py`, `ledger.py` | `mj_store.h`, `mj_ledger.h` | C was already the reference; Python reads and writes the same files. |
-| `real/edit.py` (low-rank solve, whitening) | | Not yet. |
+| `real/edit.py`: `whiten`, `with_shared_key`, `low_rank` | `mj_lowrank.h`, `mj_real lowrank` | Ported. The three big products with the background keys run through cuBLAS when built with CUDA; Cholesky, Householder QR and Jacobi SVD run on the CPU. All in double. |
+| `real/edit.py`: gradients, background keys, the Evaluator, the strength trials | | Stays with the model code (they run the model). |
 | `real/model.py`, `session.dream`, `session.evaluate` | | Stays in Python for now: it runs the Gemma forward and backward passes and the tokenizer through the transformers library. |
 | `replay.py`, `grades.py`, `toytrain.py`, `labeler.py` | | Not yet. |
 
@@ -35,6 +36,12 @@ ways on a small synthetic model and compares what lands on disk:
 - **Rollback** to `base` gives the original file byte for byte, both ways.
 - Each side applies onto a working copy the other one made, and the C ledger
   checker accepts both ledgers.
+- **Low-rank edit**: the same keys, outputs, gradients and background go
+  through Python's `low_rank` (with `with_shared_key`) and `mj_real lowrank`;
+  the products `U V` are compared (`U` and `V` alone are only defined up to
+  the sign of each singular direction). Plain, whitened, and whitened at
+  full rank: relative differences of 1.5e-6 to 3e-6, from Python's float32
+  against C's double. The test allows 1e-4.
 
 **Tolerance for the edited weights.** Python computes `U @ V` with a float32
 matrix multiply whose summation order belongs to the math library. C sums
@@ -78,8 +85,8 @@ without floating-point contraction). They give the same bytes:
   folder (the model file is not touched, and a later apply is refused).
 - **Ledger appends (M1) are unchanged**: verify, append, verify again, as
   in Python. Two writers appending to one ledger at the same moment are not
-  kept apart; run one session per data folder. How to close that is JD's
-  decision.
+  kept apart; run one session per data folder. Closing that gap needs a
+  design choice and is left open here.
 
 ## Where C is stricter than Python
 
@@ -102,7 +109,7 @@ scalar rule); real weights and edits never produce one.
 
 ## Python that is now redundant
 
-Once JD agrees, these could be removed, since C does the same job and the
+If removal is approved, these could go, since C does the same job and the
 parity tests above cover it. Nothing has been deleted.
 
 - `real/safet.py`: `read_header` only. `map_tensor` and `read_tensor` are
@@ -110,6 +117,8 @@ parity tests above cover it. Nothing has been deleted.
 - `real/delta.py`: `unpack` and `dense` for applying; `pack` is still used
   by the dream.
 - `real/workcopy.py`: all of it (checksums, copy, state, checkout).
+- `real/edit.py`: `whiten` and `low_rank` (`with_shared_key` is two lines
+  and goes with them), once the dream calls the C version.
 - `real/session.py`: `register`, `apply`, `base_sha`, and the `real-register`,
   `real-apply` and `real-verify` commands in `__main__.py`.
 

@@ -44,7 +44,9 @@ set(MJ_SOURCES
   src/mj_delta.c
   src/mj_apply.c
   src/mj_workcopy.c
-  src/mj_session.c)
+  src/mj_session.c
+  src/mj_par.c
+  src/mj_lowrank.c)
 
 # The GPU path for applying edits to real weights. Off by default; the CPU
 # path gives the same bytes.
@@ -56,9 +58,9 @@ if(MJ_CUDA)
   enable_language(CXX)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
-  set(MJ_GPU_SOURCES src/mj_apply_cuda.cu)
+  set(MJ_GPU_SOURCES src/mj_apply_cuda.cu src/mj_lowrank_cuda.cu)
 else()
-  set(MJ_GPU_SOURCES src/mj_apply_nocuda.c)
+  set(MJ_GPU_SOURCES src/mj_apply_nocuda.c src/mj_lowrank_nocuda.c)
 endif()
 
 add_library(mjolnir STATIC ${MJ_SOURCES} ${MJ_GPU_SOURCES})
@@ -71,14 +73,14 @@ if(NOT MSVC)
   target_link_libraries(mjolnir PUBLIC Threads::Threads m)
 endif()
 if(MJ_CUDA)
-  set_source_files_properties(src/mj_apply_cuda.cu PROPERTIES LANGUAGE CUDA)
+  set_source_files_properties(src/mj_apply_cuda.cu src/mj_lowrank_cuda.cu PROPERTIES LANGUAGE CUDA)
   target_compile_options(mjolnir PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-fmad=false -prec-div=true -prec-sqrt=true -ftz=false>)
   if(MSVC)
     # nvcc's generated host stub trips C4211; it is not our code
     target_compile_options(mjolnir PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/wd4211>)
   endif()
-  target_link_libraries(mjolnir PUBLIC CUDA::cudart_static)
+  target_link_libraries(mjolnir PUBLIC CUDA::cudart_static CUDA::cublas)
   target_compile_definitions(mjolnir PUBLIC MJ_HAVE_CUDA=1)
 endif()
 
@@ -94,7 +96,7 @@ set(MJ_TEST_TMP ${CMAKE_BINARY_DIR}/test-tmp)
 file(MAKE_DIRECTORY ${MJ_TEST_TMP})
 set(MJ_TEST_ENV "MJ_TEST_TMP=${MJ_TEST_TMP}")
 
-foreach(t test_hash test_store test_ledger test_score test_update test_dream test_safet test_delta test_workcopy)
+foreach(t test_hash test_store test_ledger test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank)
   add_executable(${t} tests/${t}.c)
   target_link_libraries(${t} PRIVATE mjolnir)
   target_include_directories(${t} PRIVATE tests)
@@ -113,7 +115,7 @@ set_tests_properties(fuzz_builtin PROPERTIES ENVIRONMENT "${MJ_TEST_ENV}" TIMEOU
 
 if(MJ_LIBFUZZER)
   # a second copy of the library with coverage feedback for the fuzzer
-  add_library(mjolnir_fuzz STATIC ${MJ_SOURCES} src/mj_apply_nocuda.c)
+  add_library(mjolnir_fuzz STATIC ${MJ_SOURCES} src/mj_apply_nocuda.c src/mj_lowrank_nocuda.c)
   target_include_directories(mjolnir_fuzz PUBLIC include)
   if(NOT MSVC)
     target_link_libraries(mjolnir_fuzz PUBLIC Threads::Threads m)
