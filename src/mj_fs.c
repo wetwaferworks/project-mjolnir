@@ -274,6 +274,7 @@ mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void
     do {
         char name[MJ_PATH_MAX];
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue; /* symbolic links: regular files only, as on POSIX */
         if (WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, name, (int)sizeof name, NULL, NULL) <= 0) continue;
         if (++seen > max_entries) { st = MJ_E_LIMIT; break; }
         if (fn(name, user)) break;
