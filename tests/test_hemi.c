@@ -1,10 +1,12 @@
 /* The left and right hemispheres: verdicts, the MJHEMI1 format, the
  * combiner, the merge, training, whole toy rounds (kept, rolled back,
- * repeatable) and the CPU/GPU batch scorer.
+ * repeatable), the classroom (watcher lessons, per-side gates, the pipeline)
+ * and the CPU/GPU batch scorer.
  * MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works. */
 #include "mj_test.h"
 
 #include "mjolnir/mj_fs.h"
+#include "mjolnir/mj_classroom.h"
 #include "mjolnir/mj_hemi.h"
 #include "mjolnir/mj_ledger.h"
 
@@ -214,11 +216,11 @@ static void run_rounds(const char *name, const char *scenario, uint32_t rounds, 
     mj_t_dir(dir, sizeof dir, name);
     for (r = 1; r <= rounds; ++r) { /* clean an earlier run */
         char rn[16];
-        snprintf(rn, sizeof rn, "round-%03u", (unsigned)r);
+        snprintf(rn, sizeof rn, "swap-%03u", (unsigned)r);
         if (mj_path_join(sub, sizeof sub, dir, rn) == MJ_OK) mj_t_clean(sub);
     }
     mj_t_clean(dir);
-    snprintf(ledger, sizeof ledger, "%s/hemispheres.mjl", dir);
+    CHECK_ST(mj_path_join(ledger, sizeof ledger, dir, "hemispheres.mjl"), MJ_OK);
     (void)mj_fs_remove(ledger);
     mj_budget_init(&b, 256u << 20);
     mj_hemi_toy_teacher(1, &teacher);
@@ -238,7 +240,7 @@ static void run_rounds(const char *name, const char *scenario, uint32_t rounds, 
         mj_hemi_combine_default(&c.combine);
         mj_hemi_train_default(&c.train);
         c.train.seed = c.train_seed;
-        CHECK_ST(mj_hemi_toy_round(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
+        CHECK_ST(mj_hemisphere_swap_toy(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
         if (rep.kept) {
             ++*kept;
             CHECK(rep.child_holdout_bp > rep.left_holdout_bp && rep.child_holdout_bp > rep.right_holdout_bp);
@@ -269,6 +271,160 @@ static void test_rounds(void) {
     }
 }
 
+static void test_watcher_targets(void) {
+    /* one record for each of the four judgments the key can confirm or
+     * refute, an illegal move the watcher rightly flagged, and an unsure
+     * verdict that teaches nothing */
+    mj_budget b;
+    mj_hemi_set s;
+    mj_hemi_header h;
+    mj_hemi_target *t = NULL;
+    mj_hemi_tally ty;
+    uint32_t n = 0, i;
+    static const struct { uint16_t move; uint8_t grade; } cases[6] = {
+        {0, MJ_CREDIT_SUCCESS},  /* agreed, cleared: keep +0.25 */
+        {0, MJ_CREDIT_NOT_YET},  /* agreed, failed: a miss, -1 */
+        {2, MJ_CREDIT_SUCCESS},  /* objected, cleared: a miss, +1 */
+        {2, MJ_CREDIT_NOT_YET},  /* objected, failed: keep -0.25 */
+        {3, MJ_CREDIT_NOT_YET},  /* move 3 is illegal here, rightly flagged: -0.25 */
+        {1, MJ_CREDIT_SUCCESS},  /* unsure (built below): nothing */
+    };
+    static const float want[5] = {0.25f, -1.0f, 1.0f, -0.25f, -0.25f};
+    mj_budget_init(&b, 1u << 20);
+    memset(&h, 0, sizeof h);
+    h.round = 1; h.pass = 1; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
+    h.n_features = 8; h.n_actions = 4;
+    mj_hemi_set_init(&s, &b, &h);
+    for (i = 0; i < 6; ++i) {
+        mj_hemi_record r;
+        memset(&r, 0, sizeof r);
+        r.step = (uint16_t)i;
+        r.features[0] = (int8_t)i;
+        probs4(r.actor_probs, 20000, 20000, 25535, 0);
+        if (i == 5) probs4(r.watcher_probs, 33000, 32535, 0, 0);
+        else probs4(r.watcher_probs, 50000, 10000, 5535, 0);
+        r.actor_move = (uint8_t)cases[i].move;
+        mj_hemi_judge(r.watcher_probs, 4, 0x7, r.actor_move, &r.verdict);
+        r.grade = cases[i].grade;
+        CHECK_ST(mj_hemi_set_add(&s, &r), MJ_OK);
+    }
+    mj_hemi_tally_set(&s, &ty);
+    CHECK(ty.agree_right == 1 && ty.agree_wrong == 1 && ty.object_wrong == 1 && ty.object_right == 2 && ty.unsure == 1);
+    CHECK_EQ(mj_classroom_judge_bp(&ty), 6000u);
+    CHECK_ST(mj_classroom_watcher_targets(&s, 1.0f, 0.25f, &b, &t, &n), MJ_OK);
+    CHECK_EQ(n, 5u);
+    for (i = 0; i < n && i < 5; ++i) {
+        CHECK(t[i].features[0] == (int8_t)i && t[i].move == cases[i].move && t[i].from_watcher == 1);
+        CHECK(t[i].weight == want[i]);
+    }
+    mj_bfree(&b, t, (size_t)s.n * sizeof *t);
+    CHECK_ST(mj_classroom_watcher_targets(NULL, 1.0f, 0.25f, &b, &t, &n), MJ_E_INVAL);
+    mj_hemi_set_free(&s);
+    CHECK_EQ(b.used, (size_t)0);
+}
+
+static void clean_stage_dirs(const char *dir, uint32_t rounds) {
+    char sub[MJ_PATH_MAX], rn[24];
+    uint32_t r;
+    for (r = 1; r <= rounds; ++r) {
+        snprintf(rn, sizeof rn, "classroom-%03u", (unsigned)r);
+        if (mj_path_join(sub, sizeof sub, dir, rn) == MJ_OK) mj_t_clean(sub);
+        snprintf(rn, sizeof rn, "swap-%03u", (unsigned)r);
+        if (mj_path_join(sub, sizeof sub, dir, rn) == MJ_OK) mj_t_clean(sub);
+    }
+    mj_t_clean(dir);
+}
+
+/* classroom rounds, then swap rounds, as the pipeline runs them */
+static void run_pipeline(const char *name, uint32_t classroom_rounds, uint32_t swap_rounds, int train_steps,
+                         uint8_t final_sha[2][32], uint32_t *improved, uint32_t *swaps_kept) {
+    char dir[MJ_PATH_MAX], ledger[MJ_PATH_MAX];
+    mj_toy_model teacher, left, right;
+    mj_budget b;
+    uint32_t r;
+    uint8_t blob[MJ_TOY_BLOB_LEN];
+    mj_ledger_state ls;
+    uint64_t bad;
+    mj_t_dir(dir, sizeof dir, name);
+    clean_stage_dirs(dir, classroom_rounds > swap_rounds ? classroom_rounds : swap_rounds);
+    CHECK_ST(mj_path_join(ledger, sizeof ledger, dir, "hemispheres.mjl"), MJ_OK);
+    (void)mj_fs_remove(ledger);
+    mj_budget_init(&b, 256u << 20);
+    mj_hemi_toy_teacher(1, &teacher);
+    CHECK_ST(mj_hemi_toy_parents("complement", 1, &teacher, &left, &right), MJ_OK);
+    *improved = 0;
+    *swaps_kept = 0;
+    for (r = 1; r <= classroom_rounds; ++r) {
+        mj_classroom_cfg c;
+        mj_classroom_report rep;
+        mj_toy_model l0 = left, r0 = right;
+        mj_classroom_default(&c);
+        c.round = r;
+        c.world_seed = 900000ull + r;
+        c.holdout_seed = 950000ull + r;
+        c.mazes = 256;
+        c.holdout_mazes = 1024;
+        c.train.seed = c.world_seed;
+        if (train_steps >= 0) c.train.steps = (uint32_t)train_steps;
+        CHECK_ST(mj_classroom_toy(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
+        /* each side changes only through its own gate */
+        if (rep.actor_kept) { ++*improved; CHECK(rep.actor_after_bp > rep.actor_before_bp); }
+        else CHECK(memcmp(&left, &l0, sizeof l0) == 0);
+        if (rep.watcher_kept) {
+            ++*improved;
+            CHECK(rep.watcher_judge_after_bp > rep.watcher_judge_before_bp);
+            CHECK(rep.watcher_play_after_bp >= rep.watcher_play_before_bp);
+        } else CHECK(memcmp(&right, &r0, sizeof r0) == 0);
+        CHECK(rep.tally.steps > 0);
+    }
+    for (r = 1; r <= swap_rounds; ++r) {
+        mj_hemi_round_cfg c;
+        mj_hemi_round_report rep;
+        memset(&c, 0, sizeof c);
+        c.round = r;
+        c.train_seed = 1000003ull + r;
+        c.holdout_seed = 1500003ull + r;
+        c.train_mazes = 256;
+        c.holdout_mazes = 1024;
+        c.segments = 16;
+        mj_hemi_combine_default(&c.combine);
+        mj_hemi_train_default(&c.train);
+        c.train.seed = c.train_seed;
+        CHECK_ST(mj_hemisphere_swap_toy(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
+        if (rep.kept) ++*swaps_kept;
+    }
+    CHECK_ST(mj_ledger_verify_file(ledger, &b, &ls, &bad), MJ_OK);
+    CHECK_EQ(ls.count, (uint64_t)(classroom_rounds + swap_rounds));
+    CHECK_ST(mj_toy_save(&left, blob), MJ_OK);
+    mj_sha256(blob, sizeof blob, final_sha[0]);
+    CHECK_ST(mj_toy_save(&right, blob), MJ_OK);
+    mj_sha256(blob, sizeof blob, final_sha[1]);
+    CHECK_EQ(b.used, (size_t)0);
+}
+
+static void test_classroom(void) {
+    uint8_t a[2][32], c[2][32];
+    uint32_t ia, sa, ic, sc;
+    run_pipeline("hemi_class_a", 2, 2, -1, a, &ia, &sa);
+    run_pipeline("hemi_class_b", 2, 2, -1, c, &ic, &sc);
+    CHECK(memcmp(a, c, sizeof a) == 0 && ia == ic && sa == sc); /* repeatable, bit for bit */
+    CHECK(ia >= 1);                                             /* the classroom taught something */
+    /* no learning at all: both sides are restored every time */
+    run_pipeline("hemi_class_rb", 1, 0, 0, a, &ia, &sa);
+    CHECK_EQ(ia, 0u);
+    {
+        char dir[MJ_PATH_MAX], ledger[MJ_PATH_MAX];
+        mj_budget b;
+        mj_ledger_state ls;
+        uint64_t bad;
+        mj_t_dir(dir, sizeof dir, "hemi_class_rb");
+        CHECK_ST(mj_path_join(ledger, sizeof ledger, dir, "hemispheres.mjl"), MJ_OK);
+        mj_budget_init(&b, 16u << 20);
+        CHECK_ST(mj_ledger_verify_file(ledger, &b, &ls, &bad), MJ_OK);
+        CHECK(ls.count == 1 && strcmp(ls.last.outcome, "rolled-back") == 0 && strcmp(ls.last.trigger, "classroom") == 0);
+    }
+}
+
 static void test_rollback(void) {
     /* identical parents and no learning: the child equals them and cannot
      * beat them, so the round rolls back and the parents come back intact */
@@ -281,7 +437,7 @@ static void test_rollback(void) {
     uint64_t bad;
     mj_t_dir(dir, sizeof dir, "hemi_rb");
     mj_t_clean(dir);
-    snprintf(ledger, sizeof ledger, "%s/hemispheres.mjl", dir);
+    CHECK_ST(mj_path_join(ledger, sizeof ledger, dir, "hemispheres.mjl"), MJ_OK);
     (void)mj_fs_remove(ledger);
     mj_budget_init(&b, 256u << 20);
     mj_hemi_toy_teacher(9, &teacher);
@@ -293,7 +449,7 @@ static void test_rollback(void) {
     mj_hemi_combine_default(&c.combine);
     mj_hemi_train_default(&c.train);
     c.train.steps = 0;
-    CHECK_ST(mj_hemi_toy_round(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
+    CHECK_ST(mj_hemisphere_swap_toy(dir, ledger, &teacher, &left, &right, &c, &b, &rep), MJ_OK);
     CHECK(!rep.kept);
     CHECK(memcmp(&left, &l0, sizeof l0) == 0 && memcmp(&right, &l0, sizeof l0) == 0);
     CHECK_ST(mj_ledger_verify_file(ledger, &b, &ls, &bad), MJ_OK);
@@ -335,6 +491,8 @@ int main(void) {
     test_merge_train();
     test_rounds();
     test_rollback();
+    test_watcher_targets();
+    test_classroom();
     test_gpu_parity();
     return mj_t_done("test_hemi");
 }

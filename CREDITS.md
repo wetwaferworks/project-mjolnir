@@ -12,6 +12,7 @@
 
 ## Research Mjolnir builds on
 
+- **The left and right hemispheres** are Jaydee Wetwork's idea. Published work on two networks learning from each other (deep mutual learning), on knowledge distillation and self-distillation, and on teacher-student and actor-critic training is the background. The code is a clean-room build from the ideas in those papers ([hemispheres](docs/hemispheres.md)).
 - **ROME.** Kevin Meng, David Bau, Alex Andonian and Yonatan Belinkov, "Locating and Editing Factual Associations in GPT", NeurIPS 2022. [arXiv:2202.05262](https://arxiv.org/abs/2202.05262). The real-weight edit path is a first-order, low-rank, reward-weighted form of its rank-one model editing, including its whitening of keys by the input covariance (`python/mjolnir/real/edit.py`).
 - **Bolt PCHIE** and the **Personal Control Harness**, Wet Wafer Works: the harness whose recorded runs Mjolnir replays.
 

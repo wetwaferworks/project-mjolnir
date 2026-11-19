@@ -275,14 +275,15 @@ typedef struct mj_hemi_round_report {
     char why[MJ_TEXT_MAX + 1];
 } mj_hemi_round_report;
 
-/* Run one round on toy policies. pass files go to dir/round-NNN/. When the
+/* Stage 2, the hemisphere swap: one round on toy policies. Pass files go to
+ * dir/swap-NNN/. When the
  * child is kept, *left and *right are updated: the child takes the weaker
  * parent's place and the two swap sides. When it is not, they are restored
  * from their saved blobs (checked against their SHA-256) and left as they were.
  * A journal line goes into ledger_path either way. */
-mj_status mj_hemi_toy_round(const char *dir, const char *ledger_path, const mj_toy_model *teacher,
-                            mj_toy_model *left, mj_toy_model *right, const mj_hemi_round_cfg *cfg, mj_budget *b,
-                            mj_hemi_round_report *rep);
+mj_status mj_hemisphere_swap_toy(const char *dir, const char *ledger_path, const mj_toy_model *teacher,
+                                 mj_toy_model *left, mj_toy_model *right, const mj_hemi_round_cfg *cfg, mj_budget *b,
+                                 mj_hemi_round_report *rep);
 
 /* Holdout scoring for many policies at once: actions for n states under k
  * toy policies (k * n results). CPU reference; the CUDA build has the same

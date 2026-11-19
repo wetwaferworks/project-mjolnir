@@ -54,7 +54,8 @@ set(MJ_SOURCES
   src/mj_labeler.c
   src/mj_labeler_page.c
   src/mj_labeler_net.c
-  src/mj_hemi.c)
+  src/mj_hemi.c
+  src/mj_classroom.c)
 
 # The GPU path for applying edits to real weights. Off by default; the CPU
 # path gives the same bytes.
@@ -215,9 +216,9 @@ if(MJ_PYTHON_TESTS)
   endif()
 endif()
 
-# The hemispheres on toy policies, end to end: two rounds into a fresh data
-# folder, then the journal check.
+# The hemispheres on toy policies, end to end: two classroom rounds and two
+# swap rounds into a fresh data folder, then the journal check.
 set(MJ_HEMI_DATA ${MJ_TEST_TMP}/hemi-tool-${CMAKE_BUILD_TYPE})
 add_test(NAME tool_hemi_clean COMMAND ${CMAKE_COMMAND} -E rm -rf ${MJ_HEMI_DATA})
-add_test(NAME tool_hemi COMMAND mj_hemi toy --data ${MJ_HEMI_DATA} --rounds 2 --train-mazes 128 --holdout-mazes 512)
-set_tests_properties(tool_hemi PROPERTIES PASS_REGULAR_EXPRESSION "chain OK, 2 records" DEPENDS tool_hemi_clean)
+add_test(NAME tool_hemi COMMAND mj_hemi pipeline --data ${MJ_HEMI_DATA} --classroom-rounds 2 --rounds 2 --patience 9 --train-mazes 128 --holdout-mazes 512)
+set_tests_properties(tool_hemi PROPERTIES PASS_REGULAR_EXPRESSION "chain OK, 4 records" DEPENDS tool_hemi_clean)

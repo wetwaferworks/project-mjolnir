@@ -4,6 +4,7 @@
 #include "mjolnir/mj_hemi.h"
 #include "mjolnir/mj_fs.h"
 #include "mjolnir/mj_ledger.h"
+#include "mj_hemi_internal.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -656,7 +657,7 @@ mj_status mj_hemi_toy_train(const mj_toy_model *start, const mj_hemi_target *t, 
 
 /* ---- one round ----------------------------------------------------------- */
 
-static mj_status save_toy(const char *dir, const char *name, const mj_toy_model *m, uint8_t sha[MJ_SHA256_LEN]) {
+mj_status mj_hemi_save_toy(const char *dir, const char *name, const mj_toy_model *m, uint8_t sha[MJ_SHA256_LEN]) {
     char p[MJ_PATH_MAX];
     uint8_t blob[MJ_TOY_BLOB_LEN];
     mj_status st = mj_toy_save(m, blob);
@@ -667,7 +668,7 @@ static mj_status save_toy(const char *dir, const char *name, const mj_toy_model 
     return mj_fs_write_atomic(p, blob, sizeof blob, 1);
 }
 
-static mj_status restore_toy(const char *dir, const char *name, const uint8_t want[MJ_SHA256_LEN], mj_budget *b,
+mj_status mj_hemi_restore_toy(const char *dir, const char *name, const uint8_t want[MJ_SHA256_LEN], mj_budget *b,
                              mj_toy_model *m) {
     char p[MJ_PATH_MAX];
     uint8_t *buf, sha[MJ_SHA256_LEN];
@@ -688,7 +689,7 @@ static mj_status restore_toy(const char *dir, const char *name, const uint8_t wa
     return st;
 }
 
-static mj_status write_disagreements(const char *path, const mj_hemi_set *const *sets, uint32_t n_sets) {
+mj_status mj_hemi_write_disagreements(const char *path, const mj_hemi_set *const *sets, uint32_t n_sets) {
     /* one line per step where the watcher and the key had something to say */
     size_t cap = 4096, len = 0;
     char *buf = NULL;
@@ -720,45 +721,45 @@ static mj_status write_disagreements(const char *path, const mj_hemi_set *const 
     return st;
 }
 
-static void hex12(const uint8_t *sha, char out[13]) {
+void mj_hemi_hex12(const uint8_t *sha, char out[13]) {
     char full[MJ_SHA256_HEX];
     mj_hex_encode(sha, MJ_SHA256_LEN, full);
     memcpy(out, full, 12);
     out[12] = '\0';
 }
 
-static uint32_t holdout_scores(const mj_hemi_toy_world *w, const mj_toy_model three[3], int use_gpu,
-                               uint32_t out[3], mj_budget *b) {
-    /* gather every holdout state once, then act for all three policies */
+uint32_t mj_hemi_holdout_scores(const mj_hemi_toy_world *w, const mj_toy_model *models, uint32_t n_models, int use_gpu,
+                               uint32_t *out, mj_budget *b) {
+    /* gather every holdout state once, then act for all the policies */
     uint32_t e, k, total = 0, m;
     int8_t *states;
     uint8_t *act;
     size_t at = 0;
     for (e = 0; e < w->n; ++e) total += w->mazes[e].n;
     states = (int8_t *)mj_balloc(b, (size_t)total * MJ_TOY_F);
-    act = (uint8_t *)mj_balloc(b, (size_t)total * 3u);
+    act = (uint8_t *)mj_balloc(b, (size_t)total * n_models);
     if (states == NULL || act == NULL) {
         if (states) mj_bfree(b, states, (size_t)total * MJ_TOY_F);
-        if (act) mj_bfree(b, act, (size_t)total * 3u);
-        for (m = 0; m < 3; ++m) out[m] = mj_hemi_toy_score(&three[m], w);
+        if (act) mj_bfree(b, act, (size_t)total * n_models);
+        for (m = 0; m < n_models; ++m) out[m] = mj_hemi_toy_score(&models[m], w);
         return 0;
     }
     for (e = 0; e < w->n; ++e)
         for (k = 0; k < w->mazes[e].n; ++k, ++at) memcpy(states + at * MJ_TOY_F, w->mazes[e].x[k], MJ_TOY_F);
     {
         char err[128];
-        int gpu_ok = use_gpu && mj_hemi_toy_act_batch_gpu(three, 3, states, total, act, err) == MJ_OK;
-        if (!gpu_ok) (void)mj_hemi_toy_act_batch_cpu(three, 3, states, total, act);
-        for (m = 0; m < 3; ++m) out[m] = score_from_actions(w, act + (size_t)m * total);
+        int gpu_ok = use_gpu && mj_hemi_toy_act_batch_gpu(models, n_models, states, total, act, err) == MJ_OK;
+        if (!gpu_ok) (void)mj_hemi_toy_act_batch_cpu(models, n_models, states, total, act);
+        for (m = 0; m < n_models; ++m) out[m] = score_from_actions(w, act + (size_t)m * total);
         mj_bfree(b, states, (size_t)total * MJ_TOY_F);
-        mj_bfree(b, act, (size_t)total * 3u);
+        mj_bfree(b, act, (size_t)total * n_models);
         return gpu_ok ? 1u : 0u;
     }
 }
 
-mj_status mj_hemi_toy_round(const char *dir, const char *ledger_path, const mj_toy_model *teacher,
-                            mj_toy_model *left, mj_toy_model *right, const mj_hemi_round_cfg *cfg, mj_budget *b,
-                            mj_hemi_round_report *rep) {
+mj_status mj_hemisphere_swap_toy(const char *dir, const char *ledger_path, const mj_toy_model *teacher,
+                                 mj_toy_model *left, mj_toy_model *right, const mj_hemi_round_cfg *cfg, mj_budget *b,
+                                 mj_hemi_round_report *rep) {
     char rdir[MJ_PATH_MAX], name[32], path[MJ_PATH_MAX];
     uint8_t left_sha[MJ_SHA256_LEN], right_sha[MJ_SHA256_LEN];
     mj_hemi_toy_world train, hold;
@@ -778,13 +779,13 @@ mj_status mj_hemi_toy_round(const char *dir, const char *ledger_path, const mj_t
         return MJ_E_INVAL;
     memset(rep, 0, sizeof *rep);
     rep->round = cfg->round;
-    snprintf(name, sizeof name, "round-%03u", (unsigned)cfg->round);
+    snprintf(name, sizeof name, "swap-%03u", (unsigned)cfg->round);
     if ((st = mj_path_join(rdir, sizeof rdir, dir, name)) != MJ_OK) return st;
     if ((st = mj_fs_mkdir(dir)) != MJ_OK || (st = mj_fs_mkdir(rdir)) != MJ_OK) return st;
 
     /* phase 0: checksummed snapshots of both parents, the rollback point */
-    if ((st = save_toy(rdir, "left.mjtoy", left, left_sha)) != MJ_OK) return st;
-    if ((st = save_toy(rdir, "right.mjtoy", right, right_sha)) != MJ_OK) return st;
+    if ((st = mj_hemi_save_toy(rdir, "left.mjtoy", left, left_sha)) != MJ_OK) return st;
+    if ((st = mj_hemi_save_toy(rdir, "right.mjtoy", right, right_sha)) != MJ_OK) return st;
 
     st = mj_hemi_toy_world_make(cfg->train_seed, cfg->train_mazes, cfg->segments, teacher, b, &train);
     if (st != MJ_OK) return st;
@@ -824,7 +825,7 @@ mj_status mj_hemi_toy_round(const char *dir, const char *ledger_path, const mj_t
     rep->left_pass_bp = mj_hemi_toy_score(left, &train);
     rep->right_pass_bp = mj_hemi_toy_score(right, &train);
     if ((st = mj_path_join(path, sizeof path, rdir, "disagreements.tsv")) != MJ_OK) goto out_sets;
-    if ((st = write_disagreements(path, sp, 2)) != MJ_OK) goto out_sets;
+    if ((st = mj_hemi_write_disagreements(path, sp, 2)) != MJ_OK) goto out_sets;
 
     /* phase 3: combine, weighted by the answer key */
     if ((st = mj_hemi_combine(sp, 2, &cfg->combine, b, &targets, &n_targets)) != MJ_OK) goto out_sets;
@@ -837,13 +838,13 @@ mj_status mj_hemi_toy_round(const char *dir, const char *ledger_path, const mj_t
     st = mj_hemi_toy_train(&start, targets, n_targets, &cfg->train, &child, &rep->loss);
     if (targets) mj_bfree(b, targets, (size_t)(2u * (sets[0].n + sets[1].n)) * sizeof *targets);
     if (st != MJ_OK) goto out_sets;
-    if ((st = save_toy(rdir, "child.mjtoy", &child, rep->child_sha)) != MJ_OK) goto out_sets;
+    if ((st = mj_hemi_save_toy(rdir, "child.mjtoy", &child, rep->child_sha)) != MJ_OK) goto out_sets;
 
     /* phase 4: the gate, on mazes no one has played */
     three[0] = *left;
     three[1] = *right;
     three[2] = child;
-    (void)holdout_scores(&hold, three, cfg->use_gpu, scores, b);
+    (void)mj_hemi_holdout_scores(&hold, three, 3, cfg->use_gpu, scores, b);
     rep->left_holdout_bp = scores[0];
     rep->right_holdout_bp = scores[1];
     rep->child_holdout_bp = scores[2];
@@ -869,8 +870,8 @@ mj_status mj_hemi_toy_round(const char *dir, const char *ledger_path, const mj_t
                  : scores[2] <= scores[0]                           ? "the left parent"
                                                                     : "the right parent",
                  (unsigned)scores[0], (unsigned)scores[1]);
-        if ((st = restore_toy(rdir, "left.mjtoy", left_sha, b, &rl)) != MJ_OK) goto out_sets;
-        if ((st = restore_toy(rdir, "right.mjtoy", right_sha, b, &rr)) != MJ_OK) goto out_sets;
+        if ((st = mj_hemi_restore_toy(rdir, "left.mjtoy", left_sha, b, &rl)) != MJ_OK) goto out_sets;
+        if ((st = mj_hemi_restore_toy(rdir, "right.mjtoy", right_sha, b, &rr)) != MJ_OK) goto out_sets;
         *left = rl;
         *right = rr;
     }
@@ -879,17 +880,17 @@ mj_status mj_hemi_toy_round(const char *dir, const char *ledger_path, const mj_t
     {
         char a[13], c[13], l[13], r[13], when[21];
         mj_ledger_record_init(&rec);
-        snprintf(rec.dream_id, sizeof rec.dream_id, "hemi-round-%03u", (unsigned)cfg->round);
+        snprintf(rec.dream_id, sizeof rec.dream_id, "hemi-swap-%03u", (unsigned)cfg->round);
         if (mj_utc_now(when) == MJ_OK) memcpy(rec.when, when, sizeof when);
         memcpy(rec.trigger, "hemispheres", 12);
         memcpy(rec.grader, "answer-key", 11);
-        hex12(rep->pass_sha[0], a);
-        hex12(rep->pass_sha[1], c);
+        mj_hemi_hex12(rep->pass_sha[0], a);
+        mj_hemi_hex12(rep->pass_sha[1], c);
         snprintf(rec.inputs, sizeof rec.inputs, "pass1-%s,pass2-%s", a, c);
-        hex12(left_sha, l);
-        hex12(right_sha, r);
+        mj_hemi_hex12(left_sha, l);
+        mj_hemi_hex12(right_sha, r);
         snprintf(rec.weights_before, sizeof rec.weights_before, "left-%s", l);
-        hex12(rep->child_sha, c);
+        mj_hemi_hex12(rep->child_sha, c);
         snprintf(rec.weights_candidate, sizeof rec.weights_candidate, "child-%s", c);
         snprintf(rec.edit, sizeof rec.edit,
                  "%s right-share=%u/65536 then %u answer-key targets (%u from watchers); right parent %s; loss %.4f",

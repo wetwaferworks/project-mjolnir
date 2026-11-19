@@ -6,6 +6,7 @@
 #define MJ_FUZZ_TARGETS_H
 
 #include "mjolnir/mj_delta.h"
+#include "mjolnir/mj_classroom.h"
 #include "mjolnir/mj_hemi.h"
 #include "mjolnir/mj_json.h"
 #include "mjolnir/mj_labeler.h"
@@ -270,6 +271,11 @@ static int mj_fuzz_hemi(const uint8_t *d, size_t n) {
         MJ_FUZZ_REQUIRE(mj_hemi_combine(sp, 1, &c, &b, &tg, &nt) == MJ_OK);
         MJ_FUZZ_REQUIRE(nt <= 2u * s.n);
         if (tg) mj_bfree(&b, tg, (size_t)2u * s.n * sizeof *tg);
+        /* the classroom's watcher lessons: at most one per step */
+        MJ_FUZZ_REQUIRE(mj_classroom_watcher_targets(&s, 1.0f, 0.25f, &b, &tg, &nt) == MJ_OK);
+        MJ_FUZZ_REQUIRE(nt <= s.n && nt <= t.agree_right + t.agree_wrong + t.object_right + t.object_wrong);
+        MJ_FUZZ_REQUIRE(mj_classroom_judge_bp(&t) <= 10000u);
+        if (tg) mj_bfree(&b, tg, (size_t)s.n * sizeof *tg);
         mj_hemi_set_free(&s);
     }
     MJ_FUZZ_REQUIRE(b.used == 0);

@@ -1,6 +1,12 @@
 /* mj_hemi: the left and right hemispheres, on toy policies.
  *
- *   mj_hemi toy --data DIR [--rounds N] [--scenario complement|ternary]
+ *   mj_hemi pipeline --data DIR [--classroom-rounds N] [--rounds N] ...
+ *       Stage 1, the classroom (left acts, right watches, grades and flags;
+ *       the actor learns from its errors and the watcher from its misses),
+ *       then stage 2, the hemisphere swap, starting from the classroom's
+ *       left and right. The final model is the last one kept.
+ *   mj_hemi classroom --data DIR [--classroom-rounds N] ...   stage 1 only
+ *   mj_hemi swap --data DIR [--rounds N] [--scenario complement|ternary]
  *               [--seed S] [--train-mazes N] [--holdout-mazes N] [--segments N]
  *               [--patience N] [--gpu] [--no-watcher] [--no-merge]
  *       Runs rounds until N rounds are done or N rounds in a row are rolled
@@ -17,6 +23,7 @@
  * pchie_hemispheres tool, which writes the same sample-set format.
  * MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works. */
 #include "mjolnir/mj_fs.h"
+#include "mjolnir/mj_classroom.h"
 #include "mjolnir/mj_hemi.h"
 #include "mjolnir/mj_ledger.h"
 
@@ -27,7 +34,8 @@
 
 static int usage(void) {
     fprintf(stderr,
-            "usage: mj_hemi toy --data DIR [--rounds N] [--scenario complement|ternary] [--seed S]\n"
+            "usage: mj_hemi pipeline|classroom|swap --data DIR [--classroom-rounds N] [--rounds N]\n"
+            "                   [--scenario complement|ternary] [--seed S]\n"
             "                   [--train-mazes N] [--holdout-mazes N] [--segments N] [--patience N] [--gpu]\n"
             "                   [--no-watcher] [--no-merge]\n"
             "       mj_hemi show FILE\n"
@@ -51,11 +59,12 @@ static void print_model(const char *label, const mj_toy_model *m) {
     printf("%-6s sha256 %s\n", label, h);
 }
 
-static int cmd_toy(int argc, char **argv) {
+static int cmd_run(int argc, char **argv, int do_classroom, int do_swap) {
     const char *data = NULL, *scenario = "complement";
-    uint64_t rounds = 6, seed = 1, train_mazes = 512, holdout_mazes = 2048, segments = 16, patience = 2, v;
+    uint64_t rounds = 6, classroom_rounds = 4, seed = 1, train_mazes = 512, holdout_mazes = 2048, segments = 16, patience = 2, v;
     int gpu = 0, no_watcher = 0, no_merge = 0, i;
-    uint32_t r, misses = 0, kept = 0;
+    uint32_t r, misses = 0, kept = 0, best_bp = 0;
+    char best[MJ_SHA256_HEX] = "";
     mj_toy_model teacher, left, right;
     mj_budget b;
     char ledger[MJ_PATH_MAX];
@@ -67,6 +76,7 @@ static int cmd_toy(int argc, char **argv) {
         else if (strcmp(argv[i], "--no-merge") == 0) no_merge = 1;
         else if (i + 1 < argc && parse_u64(argv[i + 1], &v)) {
             if (strcmp(argv[i], "--rounds") == 0 && v >= 1 && v <= 999) rounds = v;
+            else if (strcmp(argv[i], "--classroom-rounds") == 0 && v >= 1 && v <= 999) classroom_rounds = v;
             else if (strcmp(argv[i], "--seed") == 0) seed = v;
             else if (strcmp(argv[i], "--train-mazes") == 0 && v >= 1 && v <= 65536) train_mazes = v;
             else if (strcmp(argv[i], "--holdout-mazes") == 0 && v >= 1 && v <= 65536) holdout_mazes = v;
@@ -94,7 +104,50 @@ static int cmd_toy(int argc, char **argv) {
            (unsigned long long)segments, gpu && mj_hemi_gpu_built() ? "gpu" : "cpu");
     print_model("left", &left);
     print_model("right", &right);
-    for (r = 1; r <= rounds; ++r) {
+    if (do_classroom) {
+        uint32_t c, c_misses = 0, c_kept = 0;
+        printf("== stage 1: the classroom (left acts, right watches)\n");
+        for (c = 1; c <= classroom_rounds; ++c) {
+            mj_classroom_cfg cc;
+            mj_classroom_report cr;
+            mj_status st;
+            mj_classroom_default(&cc);
+            cc.round = c;
+            cc.world_seed = seed * 1000003ull + 900000ull + c;
+            cc.holdout_seed = seed * 1000003ull + 950000ull + c;
+            cc.mazes = (uint32_t)train_mazes;
+            cc.holdout_mazes = (uint32_t)holdout_mazes;
+            cc.segments = (uint32_t)segments;
+            cc.train.seed = cc.world_seed;
+            cc.use_gpu = gpu;
+            if (no_watcher) cc.actor_lessons.watcher_weight = 0.0f;
+            st = mj_classroom_toy(data, ledger, &teacher, &left, &right, &cc, &b, &cr);
+            if (st != MJ_OK) {
+                fprintf(stderr, "mj_hemi: classroom %u failed: %s\n", (unsigned)c, mj_status_name(st));
+                return 1;
+            }
+            printf("classroom %u: actor %u -> %u bp (%s); watcher judgments %u -> %u bp, own play %u -> %u bp (%s)\n",
+                   (unsigned)c, (unsigned)cr.actor_before_bp, (unsigned)cr.actor_after_bp,
+                   cr.actor_kept ? "kept" : "restored", (unsigned)cr.watcher_judge_before_bp,
+                   (unsigned)cr.watcher_judge_after_bp, (unsigned)cr.watcher_play_before_bp,
+                   (unsigned)cr.watcher_play_after_bp, cr.watcher_kept ? "kept" : "restored");
+            printf("  lesson: %u steps, cleared %u; watcher agreed-right %u, shared mistakes %u, objected-right %u, "
+                   "objected-wrong %u, unsure %u; %u actor targets, %u watcher targets\n",
+                   (unsigned)cr.tally.steps, (unsigned)cr.tally.cleared, (unsigned)cr.tally.agree_right,
+                   (unsigned)cr.tally.agree_wrong, (unsigned)cr.tally.object_right, (unsigned)cr.tally.object_wrong,
+                   (unsigned)cr.tally.unsure, (unsigned)cr.actor_targets, (unsigned)cr.watcher_targets);
+            if (cr.actor_kept || cr.watcher_kept) { ++c_kept; c_misses = 0; }
+            else if (++c_misses >= patience) {
+                printf("classroom stopping: %u rounds in a row restored\n", (unsigned)c_misses);
+                break;
+            }
+        }
+        printf("classroom done: %u rounds changed a side\n", (unsigned)c_kept);
+        print_model("left", &left);
+        print_model("right", &right);
+    }
+    if (do_swap) printf("== stage 2: the hemisphere swap\n");
+    for (r = 1; do_swap && r <= rounds; ++r) {
         mj_hemi_round_cfg cfg;
         mj_hemi_round_report rep;
         mj_status st;
@@ -112,7 +165,7 @@ static int cmd_toy(int argc, char **argv) {
         cfg.use_gpu = gpu;
         cfg.no_merge = no_merge;
         if (no_watcher) cfg.combine.watcher_weight = 0.0f;
-        st = mj_hemi_toy_round(data, ledger, &teacher, &left, &right, &cfg, &b, &rep);
+        st = mj_hemisphere_swap_toy(data, ledger, &teacher, &left, &right, &cfg, &b, &rep);
         if (st != MJ_OK) {
             fprintf(stderr, "mj_hemi: round %u failed: %s\n", (unsigned)r, mj_status_name(st));
             return 1;
@@ -135,13 +188,20 @@ static int cmd_toy(int argc, char **argv) {
         printf("  merge right-share %u/65536, %u targets (%u from watchers), loss %.4f\n", (unsigned)rep.alpha_q16,
                (unsigned)rep.targets, (unsigned)rep.watcher_targets, (double)rep.loss);
         printf("  pass1 %s\n  pass2 %s\n  child %s\n  %s\n", ps1, ps2, cs, rep.why);
-        if (rep.kept) { ++kept; misses = 0; }
+        if (rep.kept) {
+            ++kept;
+            misses = 0;
+            memcpy(best, cs, sizeof best);
+            best_bp = rep.child_holdout_bp;
+        }
         else if (++misses >= patience) {
             printf("stopping: %u rounds in a row rolled back\n", (unsigned)misses);
             break;
         }
     }
-    printf("done: %u rounds kept\n", (unsigned)kept);
+    if (do_swap) printf("swap done: %u rounds kept\n", (unsigned)kept);
+    if (do_swap && kept) printf("new model: child %s, holdout %u bp\n", best, (unsigned)best_bp);
+    else if (do_swap) printf("new model: no swap child beat both parents; the left and right above stand\n");
     print_model("left", &left);
     print_model("right", &right);
     {
@@ -251,7 +311,9 @@ static int cmd_bench(int argc, char **argv) {
 
 int main(int argc, char **argv) {
     if (argc < 2) return usage();
-    if (strcmp(argv[1], "toy") == 0) return cmd_toy(argc, argv);
+    if (strcmp(argv[1], "pipeline") == 0) return cmd_run(argc, argv, 1, 1);
+    if (strcmp(argv[1], "classroom") == 0) return cmd_run(argc, argv, 1, 0);
+    if (strcmp(argv[1], "swap") == 0) return cmd_run(argc, argv, 0, 1);
     if (strcmp(argv[1], "show") == 0) return cmd_show(argc, argv);
     if (strcmp(argv[1], "replay") == 0) return cmd_replay(argc, argv);
     if (strcmp(argv[1], "bench") == 0) return cmd_bench(argc, argv);
