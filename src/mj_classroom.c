@@ -74,7 +74,7 @@ static mj_status judge_score(const mj_hemi_toy_world *w, const mj_toy_model *act
     if ((st = mj_hemi_toy_bind(&at, "actor", &am)) != MJ_OK || (st = mj_hemi_toy_bind(&wt, "watcher", &wm)) != MJ_OK)
         return st;
     memset(&h, 0, sizeof h);
-    h.round = round; h.pass = 1; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
+    h.round = round; h.pass = 1; h.purpose = MJ_HEMI_LESSON; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
     h.n_features = MJ_TOY_F; h.n_actions = MJ_TOY_A;
     mj_hemi_set_init(&s, b, &h);
     st = mj_hemi_toy_pass(w, &am, &wm, &s);
@@ -121,7 +121,7 @@ mj_status mj_classroom_toy(const char *dir, const char *ledger_path, const mj_to
     lt.m = *left;
     rt.m = *right;
     memset(&h, 0, sizeof h);
-    h.round = cfg->round; h.pass = 1; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
+    h.round = cfg->round; h.pass = 1; h.purpose = MJ_HEMI_LESSON; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
     h.n_features = MJ_TOY_F; h.n_actions = MJ_TOY_A; h.seed = cfg->world_seed;
     mj_hemi_set_init(&lesson, b, &h);
     if ((st = mj_hemi_toy_bind(&lt, "left", &lm)) != MJ_OK || (st = mj_hemi_toy_bind(&rt, "right", &rm)) != MJ_OK)

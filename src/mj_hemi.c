@@ -10,8 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static const uint8_t HEMI_MAGIC[8] = {'M', 'J', 'H', 'E', 'M', 'I', '1', 0};
-#define HEMI_VERSION 1u
+static const uint8_t HEMI_MAGIC[8] = {'M', 'J', 'H', 'E', 'M', 'I', '2', 0};
+#define HEMI_VERSION 2u
 
 uint64_t mj_hemi_next(uint64_t *state) {
     uint64_t z = (*state += 0x9E3779B97F4A7C15ull);
@@ -124,6 +124,7 @@ mj_status mj_hemi_header_check(const mj_hemi_header *h) {
     if (h->world < MJ_HEMI_WORLD_TOY_MAZE || h->world > MJ_HEMI_WORLD_CIRCUIT) return MJ_E_INVAL;
     if (h->n_features < 1 || h->n_features > MJ_HEMI_MAX_FEATURES) return MJ_E_INVAL;
     if (h->n_actions < 2 || h->n_actions > MJ_HEMI_MAX_ACTIONS) return MJ_E_INVAL;
+    if (h->purpose != MJ_HEMI_LESSON && h->purpose != MJ_HEMI_HOLDOUT) return MJ_E_INVAL;
     return MJ_OK;
 }
 
@@ -184,11 +185,12 @@ mj_status mj_hemi_encode(const mj_hemi_set *s, mj_budget *b, uint8_t **out, size
     p[18] = s->h.world;
     p[19] = s->h.n_features;
     p[20] = s->h.n_actions;
+    p[21] = s->h.purpose;
     put64(p + 24, s->h.seed);
     memcpy(p + 32, s->h.actor, MJ_HEMI_FINGERPRINT);
-    memcpy(p + 48, s->h.observer, MJ_HEMI_FINGERPRINT);
-    put32(p + 64, s->n);
-    put32(p + 68, rb);
+    memcpy(p + 64, s->h.observer, MJ_HEMI_FINGERPRINT);
+    put32(p + 96, s->n);
+    put32(p + 100, rb);
     q = p + MJ_HEMI_HEADER_BYTES;
     for (i = 0; i < s->n; ++i) {
         const mj_hemi_record *r = &s->r[i];
@@ -227,8 +229,8 @@ mj_status mj_hemi_parse(const uint8_t *buf, size_t len, mj_budget *b, mj_hemi_se
     if (get16(buf + 8) != HEMI_VERSION || get16(buf + 10) != MJ_HEMI_HEADER_BYTES) return MJ_E_INVAL;
     mj_sha256(buf, len - MJ_HEMI_TRAILER_BYTES, sha);
     if (memcmp(sha, buf + len - MJ_HEMI_TRAILER_BYTES, MJ_SHA256_LEN) != 0) return MJ_E_CORRUPT;
-    if (buf[21] || buf[22] || buf[23]) return MJ_E_INVAL;
-    for (k = 72; k < MJ_HEMI_HEADER_BYTES; ++k)
+    if (buf[22] || buf[23]) return MJ_E_INVAL;
+    for (k = 104; k < MJ_HEMI_HEADER_BYTES; ++k)
         if (buf[k]) return MJ_E_INVAL;
     memset(&h, 0, sizeof h);
     h.round = get32(buf + 12);
@@ -237,12 +239,13 @@ mj_status mj_hemi_parse(const uint8_t *buf, size_t len, mj_budget *b, mj_hemi_se
     h.world = buf[18];
     h.n_features = buf[19];
     h.n_actions = buf[20];
+    h.purpose = buf[21];
     h.seed = get64(buf + 24);
     memcpy(h.actor, buf + 32, MJ_HEMI_FINGERPRINT);
-    memcpy(h.observer, buf + 48, MJ_HEMI_FINGERPRINT);
+    memcpy(h.observer, buf + 64, MJ_HEMI_FINGERPRINT);
     if (mj_hemi_header_check(&h) != MJ_OK) return MJ_E_INVAL;
-    n = get32(buf + 64);
-    rb = get32(buf + 68);
+    n = get32(buf + 96);
+    rb = get32(buf + 100);
     if (rb != mj_hemi_record_bytes(&h) || n > MJ_HEMI_MAX_RECORDS) return MJ_E_INVAL;
     if ((uint64_t)len != (uint64_t)MJ_HEMI_HEADER_BYTES + (uint64_t)n * rb + MJ_HEMI_TRAILER_BYTES) return MJ_E_INVAL;
     mj_hemi_set_init(&s, b, &h);
@@ -804,6 +807,7 @@ mj_status mj_hemisphere_swap_toy(const char *dir, const char *ledger_path, const
         memset(&h, 0, sizeof h);
         h.round = cfg->round;
         h.pass = (uint8_t)(i + 1);
+        h.purpose = MJ_HEMI_LESSON;
         h.actor_side = (uint8_t)(i == 0 ? MJ_HEMI_LEFT : MJ_HEMI_RIGHT);
         h.world = MJ_HEMI_WORLD_TOY_MAZE;
         h.n_features = MJ_TOY_F;

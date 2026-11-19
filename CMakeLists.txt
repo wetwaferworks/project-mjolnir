@@ -55,7 +55,8 @@ set(MJ_SOURCES
   src/mj_labeler_page.c
   src/mj_labeler_net.c
   src/mj_hemi.c
-  src/mj_classroom.c)
+  src/mj_classroom.c
+  src/mj_hemi_gate.c)
 
 # The GPU path for applying edits to real weights. Off by default; the CPU
 # path gives the same bytes.
@@ -222,10 +223,15 @@ set(MJ_HEMI_DATA ${MJ_TEST_TMP}/hemi-tool-${CMAKE_BUILD_TYPE})
 add_test(NAME tool_hemi_clean COMMAND ${CMAKE_COMMAND} -E rm -rf ${MJ_HEMI_DATA} ${MJ_HEMI_DATA}-gate)
 add_test(NAME tool_hemi COMMAND mj_hemi pipeline --data ${MJ_HEMI_DATA} --classroom-rounds 2 --rounds 2 --patience 9 --train-mazes 128 --holdout-mazes 512)
 set_tests_properties(tool_hemi PROPERTIES PASS_REGULAR_EXPRESSION "chain OK, 4 records" DEPENDS tool_hemi_clean)
-# The gate a real-model run asks for its decision: it reads a lesson the toy run
-# wrote, keeps a better candidate and journals it.
 string(REPEAT "a" 64 MJ_HEX_A)
 string(REPEAT "b" 64 MJ_HEX_B)
-add_test(NAME tool_hemi_gate COMMAND mj_hemi gate --data ${MJ_HEMI_DATA}-gate --kind actor --round 1
-         --set ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi --before 100 --after 200 --parent ${MJ_HEX_A} --candidate ${MJ_HEX_B})
-set_tests_properties(tool_hemi_gate PROPERTIES PASS_REGULAR_EXPRESSION "real-actor-001: keep" DEPENDS tool_hemi)
+# The gate works out every score itself: a score on the command line is not accepted, a lesson is not holdout
+# evidence, and sets must be bound to the models named. The full rules are tested in test_hemi (test_gate).
+add_test(NAME tool_hemi_gate_no_scores COMMAND mj_hemi gate --data ${MJ_HEMI_DATA}-gate --kind actor --round 1
+         --lesson ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi --holdout ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi
+         --before 100 --after 200 --parent ${MJ_HEX_A} --candidate ${MJ_HEX_B})
+set_tests_properties(tool_hemi_gate_no_scores PROPERTIES PASS_REGULAR_EXPRESSION "usage: mj_hemi" DEPENDS tool_hemi)
+add_test(NAME tool_hemi_gate_refuses COMMAND mj_hemi gate --data ${MJ_HEMI_DATA}-gate --kind actor --round 1
+         --lesson ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi --holdout ${MJ_HEMI_DATA}/classroom-001/lesson.mjhemi
+         --parent ${MJ_HEX_A} --candidate ${MJ_HEX_B})
+set_tests_properties(tool_hemi_gate_refuses PROPERTIES PASS_REGULAR_EXPRESSION "refused: holdout set 1 is marked as a lesson set" DEPENDS tool_hemi)

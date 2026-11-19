@@ -1,13 +1,14 @@
-/* The left and right hemispheres: verdicts, the MJHEMI1 format, the
+/* The left and right hemispheres: verdicts, the MJHEMI2 format, the
  * combiner, the merge, training, whole toy rounds (kept, rolled back,
- * repeatable), the classroom (watcher lessons, per-side gates, the pipeline)
- * and the CPU/GPU batch scorer.
+ * repeatable), the classroom (watcher lessons, per-side gates, the pipeline),
+ * the gate for real-model rounds and the CPU/GPU batch scorer.
  * MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works. */
 #include "mj_test.h"
 
 #include "mjolnir/mj_fs.h"
 #include "mjolnir/mj_classroom.h"
 #include "mjolnir/mj_hemi.h"
+#include "mjolnir/mj_hemi_gate.h"
 #include "mjolnir/mj_ledger.h"
 
 static void probs4(uint16_t p[MJ_HEMI_MAX_ACTIONS], uint16_t a, uint16_t b, uint16_t c, uint16_t d) {
@@ -41,7 +42,7 @@ static void sample_set(mj_hemi_set *s, mj_budget *b, uint32_t n) {
     mj_hemi_header h;
     uint32_t i;
     memset(&h, 0, sizeof h);
-    h.round = 7; h.pass = 2; h.actor_side = MJ_HEMI_RIGHT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
+    h.round = 7; h.pass = 2; h.purpose = MJ_HEMI_HOLDOUT; h.actor_side = MJ_HEMI_RIGHT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
     h.n_features = 8; h.n_actions = 4; h.seed = 0x0123456789ABCDEFull;
     memset(h.actor, 0xA1, sizeof h.actor);
     memset(h.observer, 0xB2, sizeof h.observer);
@@ -73,7 +74,7 @@ static void test_format(void) {
     CHECK_ST(mj_hemi_encode(&s, &b, &buf, &n), MJ_OK);
     CHECK_EQ(n, (size_t)(MJ_HEMI_HEADER_BYTES + 30u * (14u + 8u + 16u) + MJ_HEMI_TRAILER_BYTES));
     CHECK_ST(mj_hemi_parse(buf, n, &b, &t), MJ_OK);
-    CHECK(t.n == 30 && t.h.round == 7 && t.h.pass == 2 && t.h.seed == 0x0123456789ABCDEFull);
+    CHECK(t.n == 30 && t.h.round == 7 && t.h.pass == 2 && t.h.purpose == MJ_HEMI_HOLDOUT && t.h.seed == 0x0123456789ABCDEFull);
     CHECK(memcmp(t.r, s.r, 30 * sizeof *s.r) == 0);
     CHECK_ST(mj_hemi_encode(&t, &b, &buf2, &n2), MJ_OK); /* the same bytes back */
     CHECK(n2 == n && memcmp(buf, buf2, n) == 0);
@@ -90,8 +91,8 @@ static void test_format(void) {
     CHECK_EQ(bad, 0u);
     /* fields that pass the checksum but break the rules: re-seal and refuse */
     {
-        static const size_t at[] = {8, 10, 16, 17, 18, 19, 20, 21, 68, 80, 96 + 6, 96 + 7, 96 + 8, 96 + 9, 96 + 13};
-        static const uint8_t val[] = {2, 95, 3, 2, 9, 65, 17, 1, 99, 1, 4, 0, 4, 5, 0x40};
+        static const size_t at[] = {8, 10, 16, 17, 18, 19, 20, 21, 21, 22, 100, 110, 128 + 6, 128 + 7, 128 + 8, 128 + 9, 128 + 13};
+        static const uint8_t val[] = {3, 127, 3, 2, 9, 65, 17, 0, 3, 1, 99, 1, 4, 0, 4, 5, 0x40};
         size_t k;
         for (k = 0; k < sizeof at / sizeof at[0]; ++k) {
             uint8_t keep = buf[at[k]];
@@ -292,7 +293,7 @@ static void test_watcher_targets(void) {
     static const float want[5] = {0.25f, -1.0f, 1.0f, -0.25f, -0.25f};
     mj_budget_init(&b, 1u << 20);
     memset(&h, 0, sizeof h);
-    h.round = 1; h.pass = 1; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
+    h.round = 1; h.pass = 1; h.purpose = MJ_HEMI_LESSON; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_TOY_MAZE;
     h.n_features = 8; h.n_actions = 4;
     mj_hemi_set_init(&s, &b, &h);
     for (i = 0; i < 6; ++i) {
@@ -484,6 +485,207 @@ static void test_gpu_parity(void) {
     printf("gpu parity: %u moves, %u differ\n", (unsigned)(N * 3), (unsigned)diff);
 }
 
+/* ---- the gate for rounds played outside Mjolnir (review of 19 November 2026) ----
+ * Scores are worked out by Mjolnir from sealed sets bound to each model's
+ * SHA-256; nothing is taken from the caller's word. */
+#define GATE_N 40u
+
+/* A set over GATE_N states. moves[i] is the actor's move and wmoves[i] the
+ * watcher's; the answer key clears moves 0 and 1 and nothing else. */
+static void gate_set(mj_hemi_set *s, mj_budget *b, uint8_t purpose, uint64_t seed, uint8_t actor, uint8_t watcher,
+                     const uint8_t *moves, const uint8_t *wmoves) {
+    mj_hemi_header h;
+    uint32_t i;
+    memset(&h, 0, sizeof h);
+    h.round = 1; h.pass = 1; h.purpose = purpose; h.actor_side = MJ_HEMI_LEFT; h.world = MJ_HEMI_WORLD_GRID_MAZE;
+    h.n_features = 2; h.n_actions = 4; h.seed = seed;
+    memset(h.actor, actor, MJ_HEMI_FINGERPRINT);
+    memset(h.observer, watcher, MJ_HEMI_FINGERPRINT);
+    mj_hemi_set_init(s, b, &h);
+    for (i = 0; i < GATE_N; ++i) {
+        mj_hemi_record r;
+        memset(&r, 0, sizeof r);
+        r.episode = i / 8;
+        r.step = (uint16_t)(i % 8);
+        r.features[0] = (int8_t)(i % 7);
+        r.features[1] = (int8_t)(i / 7 + (int)seed);
+        r.actor_move = moves[i];
+        r.grade = moves[i] <= 1 ? MJ_CREDIT_SUCCESS : MJ_CREDIT_NOT_YET;
+        r.actor_probs[moves[i]] = MJ_HEMI_PROB_ONE;
+        r.watcher_probs[wmoves[i]] = MJ_HEMI_PROB_ONE;
+        r.verdict.choice = wmoves[i];
+        r.verdict.reason = wmoves[i] == moves[i] ? MJ_HEMI_AGREE : MJ_HEMI_PREFER_OTHER;
+        r.verdict.confidence_bp = 10000;
+        CHECK_ST(mj_hemi_set_add(s, &r), MJ_OK);
+    }
+}
+
+/* cleared: how many of the GATE_N moves are good ones */
+static void gate_moves(uint8_t *m, uint32_t cleared) {
+    uint32_t i;
+    for (i = 0; i < GATE_N; ++i) m[i] = (uint8_t)(i < cleared ? (i & 1) : 2 + (i & 1));
+}
+
+static void gate_in(mj_hemi_gate_in *in, mj_budget *b, uint32_t kind, uint8_t parent, uint8_t cand, uint8_t other) {
+    memset(in, 0, sizeof *in);
+    in->kind = kind;
+    in->budget = b;
+    memset(in->parent, parent, MJ_HEMI_FINGERPRINT);
+    memset(in->candidate, cand, MJ_HEMI_FINGERPRINT);
+    memset(in->other, other, MJ_HEMI_FINGERPRINT);
+}
+
+static void test_gate(void) {
+    enum { P = 1, C = 2, W = 3, A = 4, O = 5 };
+    mj_budget b;
+    mj_hemi_set lesson, hp, hc, ho, x;
+    mj_hemi_gate_in in;
+    mj_hemi_gate_out g;
+    uint8_t m20[GATE_N], m30[GATE_N], m35[GATE_N], all_good[GATE_N];
+    mj_budget_init(&b, 64u << 20);
+    gate_moves(m20, 20);
+    gate_moves(m30, 30);
+    gate_moves(m35, 35);
+    gate_moves(all_good, GATE_N);
+
+    /* actor: the candidate plays better on the same held-out states -> keep */
+    gate_set(&lesson, &b, MJ_HEMI_LESSON, 1, P, W, m20, m20);
+    gate_set(&hp, &b, MJ_HEMI_HOLDOUT, 2, P, P, m20, m20);
+    gate_set(&hc, &b, MJ_HEMI_HOLDOUT, 2, C, C, m30, m30);
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hp;
+    in.holdout[in.n_holdout++] = &hc;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_OK);
+    CHECK(g.keep == 1 && g.states == GATE_N && g.before_bp == 5000 && g.after_bp == 7500);
+    /* the same evidence read the other way round -> roll back */
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, C, P, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hp;
+    in.holdout[in.n_holdout++] = &hc;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);   /* the lesson was not played by C */
+    CHECK(strstr(g.why, "not played by the parent") != NULL);
+    /* a made-up parent: no set is bound to it */
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, 9, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hc;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    /* the parent's own play is missing */
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hc;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    CHECK(strstr(g.why, "played by the parent") != NULL);
+    /* a lesson passed off as holdout evidence */
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &lesson;
+    in.holdout[in.n_holdout++] = &hc;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    CHECK(strstr(g.why, "marked as a lesson set") != NULL);
+    /* the candidate scored on easier states */
+    gate_set(&x, &b, MJ_HEMI_HOLDOUT, 3, C, C, m30, m30);
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hp;
+    in.holdout[in.n_holdout++] = &x;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    CHECK(strstr(g.why, "same states") != NULL);
+    mj_hemi_set_free(&x);
+    /* a grade bumped without changing the move: the key graded the same move two ways */
+    gate_set(&x, &b, MJ_HEMI_HOLDOUT, 2, C, C, m30, m30);
+    x.r[35].grade = MJ_CREDIT_SUCCESS;                   /* move 3 on state 35: P's set says not yet */
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hp;
+    in.holdout[in.n_holdout++] = &x;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    CHECK(strstr(g.why, "two ways") != NULL);
+    mj_hemi_set_free(&x);
+    /* a recorded move that is not the one its distribution picks */
+    gate_set(&x, &b, MJ_HEMI_HOLDOUT, 2, C, C, m30, m30);
+    x.r[33].actor_move = 0;
+    x.r[33].grade = MJ_CREDIT_SUCCESS;
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hp;
+    in.holdout[in.n_holdout++] = &x;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    CHECK(strstr(g.why, "distribution") != NULL);
+    mj_hemi_set_free(&x);
+    /* two sets that claim the same model played differently */
+    gate_set(&x, &b, MJ_HEMI_HOLDOUT, 2, C, W, m35, m35);
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, C, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hp;
+    in.holdout[in.n_holdout++] = &hc;
+    in.holdout[in.n_holdout++] = &x;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    mj_hemi_set_free(&x);
+    /* the candidate is the parent */
+    gate_in(&in, &b, MJ_HEMI_GATE_ACTOR, P, P, 0);
+    in.lessons[in.n_lessons++] = &lesson;
+    in.holdout[in.n_holdout++] = &hp;
+    CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+    mj_hemi_set_free(&lesson);
+
+    /* watcher: parent P and candidate C both watch actor A on the held-out states */
+    {
+        mj_hemi_set jp, jc, ha;
+        gate_set(&lesson, &b, MJ_HEMI_LESSON, 1, A, P, m20, m20);
+        gate_set(&ha, &b, MJ_HEMI_HOLDOUT, 2, A, A, m20, m20);
+        gate_set(&jp, &b, MJ_HEMI_HOLDOUT, 2, A, P, m20, m20);       /* agrees with everything: 50% right */
+        gate_set(&jc, &b, MJ_HEMI_HOLDOUT, 2, A, C, m20, all_good);  /* objects exactly to the bad moves */
+        gate_in(&in, &b, MJ_HEMI_GATE_WATCHER, P, C, 0);
+        in.lessons[in.n_lessons++] = &lesson;
+        in.holdout[in.n_holdout++] = &hp;
+        in.holdout[in.n_holdout++] = &hc;
+        in.holdout[in.n_holdout++] = &ha;
+        in.holdout[in.n_holdout++] = &jp;
+        in.holdout[in.n_holdout++] = &jc;
+        CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_OK);
+        CHECK(g.keep == 1 && g.judge_before_bp == 5000 && g.judge_after_bp == 10000 && g.after_bp >= g.before_bp);
+        /* without the candidate's judgments nothing is decided */
+        in.n_holdout = 4;
+        CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+        mj_hemi_set_free(&jp);
+        mj_hemi_set_free(&jc);
+        mj_hemi_set_free(&ha);
+        mj_hemi_set_free(&lesson);
+    }
+
+    /* swap: the child must beat both parents */
+    {
+        mj_hemi_set l1, l2;
+        gate_set(&l1, &b, MJ_HEMI_LESSON, 1, P, O, m20, m20);
+        gate_set(&l2, &b, MJ_HEMI_LESSON, 1, O, P, m20, m20);
+        gate_set(&ho, &b, MJ_HEMI_HOLDOUT, 2, O, O, m30, m30);
+        gate_set(&x, &b, MJ_HEMI_HOLDOUT, 2, C, C, m35, m35);
+        gate_in(&in, &b, MJ_HEMI_GATE_SWAP, P, C, O);
+        in.lessons[in.n_lessons++] = &l1;
+        in.lessons[in.n_lessons++] = &l2;
+        in.holdout[in.n_holdout++] = &hp;
+        in.holdout[in.n_holdout++] = &ho;
+        in.holdout[in.n_holdout++] = &x;
+        CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_OK);
+        CHECK(g.keep == 1 && g.before_bp == 5000 && g.other_bp == 7500 && g.after_bp == 8750);
+        /* a child that only ties the stronger parent is rolled back */
+        in.holdout[2] = &hc;
+        CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_OK);
+        CHECK(g.keep == 0 && g.after_bp == 7500);
+        /* one pass alone is not a swap */
+        in.n_lessons = 1;
+        CHECK_ST(mj_hemi_gate_decide(&in, &g), MJ_E_INVAL);
+        mj_hemi_set_free(&l1);
+        mj_hemi_set_free(&l2);
+        mj_hemi_set_free(&ho);
+        mj_hemi_set_free(&x);
+    }
+    mj_hemi_set_free(&hp);
+    mj_hemi_set_free(&hc);
+    CHECK_EQ(b.used, (size_t)0);
+}
+
 int main(void) {
     test_judge();
     test_format();
@@ -493,6 +695,7 @@ int main(void) {
     test_rollback();
     test_watcher_targets();
     test_classroom();
+    test_gate();
     test_gpu_parity();
     return mj_t_done("test_hemi");
 }

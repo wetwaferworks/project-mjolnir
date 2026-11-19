@@ -8,6 +8,7 @@
 #include "mjolnir/mj_delta.h"
 #include "mjolnir/mj_classroom.h"
 #include "mjolnir/mj_hemi.h"
+#include "mjolnir/mj_hemi_gate.h"
 #include "mjolnir/mj_json.h"
 #include "mjolnir/mj_labeler.h"
 #include "mjolnir/mj_ledger.h"
@@ -244,7 +245,7 @@ static int mj_fuzz_http(const uint8_t *d, size_t n) {
     return 0;
 }
 
-/* A hemisphere sample set (MJHEMI1): a parse that succeeds must give the
+/* A hemisphere sample set (MJHEMI2): a parse that succeeds must give the
  * very same bytes back, its tallies must add up, the combiner must accept it,
  * and nothing may be left allocated. */
 static int mj_fuzz_hemi(const uint8_t *d, size_t n) {
@@ -276,6 +277,22 @@ static int mj_fuzz_hemi(const uint8_t *d, size_t n) {
         MJ_FUZZ_REQUIRE(nt <= s.n && nt <= t.agree_right + t.agree_wrong + t.object_right + t.object_wrong);
         MJ_FUZZ_REQUIRE(mj_classroom_judge_bp(&t) <= 10000u);
         if (tg) mj_bfree(&b, tg, (size_t)s.n * sizeof *tg);
+        { /* the gate on a parsed set, as lesson and as holdout: refused or decided, never more */
+            mj_hemi_gate_in gi;
+            mj_hemi_gate_out go;
+            mj_status gs;
+            memset(&gi, 0, sizeof gi);
+            gi.kind = 1u + (uint32_t)(s.h.round % 3u);
+            gi.budget = &b;
+            memcpy(gi.parent, s.h.actor, MJ_HEMI_FINGERPRINT);
+            memcpy(gi.candidate, s.h.observer, MJ_HEMI_FINGERPRINT);
+            gi.other[0] = (uint8_t)(s.h.seed ^ 0x5a);
+            gi.lessons[gi.n_lessons++] = &s;
+            gi.holdout[gi.n_holdout++] = &s;
+            gs = mj_hemi_gate_decide(&gi, &go);
+            MJ_FUZZ_REQUIRE(gs == MJ_OK || gs == MJ_E_INVAL);
+            MJ_FUZZ_REQUIRE(go.before_bp <= 10000u && go.after_bp <= 10000u && go.judge_after_bp <= 10000u);
+        }
         mj_hemi_set_free(&s);
     }
     MJ_FUZZ_REQUIRE(b.used == 0);

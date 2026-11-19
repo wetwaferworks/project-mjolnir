@@ -6,12 +6,13 @@
  *       then stage 2, the hemisphere swap, starting from the classroom's
  *       left and right. The final model is the last one kept.
  *   mj_hemi classroom --data DIR [--classroom-rounds N] ...   stage 1 only
- *   mj_hemi gate --data DIR --kind actor|watcher|swap --round N --set FILE [--set FILE]
- *                --before BP --after BP [--other BP] [--judge-before BP --judge-after BP]
- *                --parent SHA --candidate SHA [--note TEXT]
+ *   mj_hemi gate --data DIR --kind actor|watcher|swap --round N --lesson FILE... --holdout FILE...
+ *                --parent SHA --candidate SHA [--other SHA] [--note TEXT]
  *       The keep-or-roll-back decision for a run on a real model (PCHIE's
- *       pchie_hemispheres asks it): checks the sets' seals, decides, journals.
- *       Exit 0 keep, 3 roll back.
+ *       pchie_hemispheres asks it). Mjolnir works out every score itself from
+ *       the sealed holdout sets, which must be bound to the named models by
+ *       their SHA-256 (see mj_hemi_gate.h), then decides and journals.
+ *       Exit 0 keep, 3 roll back, 2 evidence refused, 1 unreadable.
  *   mj_hemi swap --data DIR [--rounds N] [--scenario complement|ternary]
  *               [--seed S] [--train-mazes N] [--holdout-mazes N] [--segments N]
  *               [--patience N] [--gpu] [--no-watcher] [--no-merge]
@@ -31,6 +32,7 @@
 #include "mjolnir/mj_fs.h"
 #include "mjolnir/mj_classroom.h"
 #include "mjolnir/mj_hemi.h"
+#include "mjolnir/mj_hemi_gate.h"
 #include "mjolnir/mj_ledger.h"
 
 #include <stdio.h>
@@ -44,9 +46,8 @@ static int usage(void) {
             "                   [--scenario complement|ternary] [--seed S]\n"
             "                   [--train-mazes N] [--holdout-mazes N] [--segments N] [--patience N] [--gpu]\n"
             "                   [--no-watcher] [--no-merge]\n"
-            "       mj_hemi gate --data DIR --kind actor|watcher|swap --round N --set FILE [--set FILE]\n"
-            "                --before BP --after BP [--other BP] [--judge-before BP --judge-after BP]\n"
-            "                --parent SHA --candidate SHA [--note TEXT]\n"
+            "       mj_hemi gate --data DIR --kind actor|watcher|swap --round N --lesson FILE... --holdout FILE...\n"
+            "                --parent SHA --candidate SHA [--other SHA] [--note TEXT]\n"
             "       mj_hemi show FILE\n"
             "       mj_hemi replay FILE [--limit N]\n"
             "       mj_hemi bench [--states N]\n");
@@ -244,7 +245,7 @@ static int cmd_show(int argc, char **argv) {
     mj_hemi_tally_set(&s, &t);
     hex(s.h.actor, MJ_HEMI_FINGERPRINT, a);
     hex(s.h.observer, MJ_HEMI_FINGERPRINT, o);
-    printf("round %u pass %u, %s side plays, world %u, %u features, %u moves, seed %llu\n", (unsigned)s.h.round,
+    printf("%s set, round %u pass %u, %s side plays, world %u, %u features, %u moves, seed %llu\n", s.h.purpose == MJ_HEMI_HOLDOUT ? "holdout" : "lesson", (unsigned)s.h.round,
            (unsigned)s.h.pass, s.h.actor_side ? "right" : "left", (unsigned)s.h.world, (unsigned)s.h.n_features,
            (unsigned)s.h.n_actions, (unsigned long long)s.h.seed);
     printf("actor %s\nwatcher %s\n", a, o);
@@ -322,125 +323,150 @@ static int cmd_bench(int argc, char **argv) {
  * model behind PCHIE). The caller measured the scores on holdout worlds and
  * wrote the sample sets; Mjolnir checks the sets' seals, makes the decision
  * and journals it. Exit 0 keep, 3 roll back, 1 or 2 refused. */
-static int parse_bp(const char *s, uint64_t *out) {
-    uint64_t v;
-    if (!parse_u64(s, &v) || v > 10000u) return 0;
-    *out = v;
-    return 1;
-}
 static int hex64_ok(const char *s) {
     size_t i;
-    if (strlen(s) != 2 * MJ_SHA256_LEN) return 0;
-    for (i = 0; s[i]; ++i)
+    if (strlen(s) != 64) return 0;
+    for (i = 0; i < 64; ++i)
         if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0;
     return 1;
 }
+
 static int cmd_gate(int argc, char **argv) {
-    const char *data = NULL, *kind = NULL, *sets[2] = {NULL, NULL}, *parent = NULL, *candidate = NULL, *note = "-";
-    uint64_t round = 0, before = 0, after = 0, other = 0, jb = 0, ja = 0;
-    int have_before = 0, have_after = 0, have_other = 0, have_jb = 0, have_ja = 0, n_sets = 0, i, keep;
+    const char *data = NULL, *kind = NULL, *parent = NULL, *candidate = NULL, *other = NULL, *note = "-";
+    const char *lesson_paths[MJ_HEMI_GATE_MAX_SETS], *holdout_paths[MJ_HEMI_GATE_MAX_SETS];
+    mj_hemi_set sets[2 * MJ_HEMI_GATE_MAX_SETS];
+    uint32_t n_lessons = 0, n_holdout = 0, n_loaded = 0, k;
+    uint64_t round = 0;
+    int i, rc = 1;
     char ledger[MJ_PATH_MAX];
     mj_budget b;
     mj_dream_record rec;
     mj_ledger_state ls;
+    mj_hemi_gate_in in;
+    mj_hemi_gate_out g;
+    mj_status st;
     uint64_t bad;
     char inputs[MJ_TEXT_MAX + 1] = "";
-    char tallies[MJ_TEXT_MAX + 1] = "";
     char when[21];
     for (i = 2; i < argc; ++i) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (v == NULL) return usage();
         if (strcmp(a, "--data") == 0) data = v;
         else if (strcmp(a, "--kind") == 0) kind = v;
-        else if (strcmp(a, "--set") == 0 && n_sets < 2) sets[n_sets++] = v;
+        else if (strcmp(a, "--lesson") == 0 && n_lessons < MJ_HEMI_GATE_MAX_SETS) lesson_paths[n_lessons++] = v;
+        else if (strcmp(a, "--holdout") == 0 && n_holdout < MJ_HEMI_GATE_MAX_SETS) holdout_paths[n_holdout++] = v;
         else if (strcmp(a, "--parent") == 0) parent = v;
         else if (strcmp(a, "--candidate") == 0) candidate = v;
+        else if (strcmp(a, "--other") == 0) other = v;
         else if (strcmp(a, "--note") == 0) note = v;
         else if (strcmp(a, "--round") == 0) { if (!parse_u64(v, &round) || round > 999) return usage(); }
-        else if (strcmp(a, "--before") == 0) { if (!parse_bp(v, &before)) return usage(); have_before = 1; }
-        else if (strcmp(a, "--after") == 0) { if (!parse_bp(v, &after)) return usage(); have_after = 1; }
-        else if (strcmp(a, "--other") == 0) { if (!parse_bp(v, &other)) return usage(); have_other = 1; }
-        else if (strcmp(a, "--judge-before") == 0) { if (!parse_bp(v, &jb)) return usage(); have_jb = 1; }
-        else if (strcmp(a, "--judge-after") == 0) { if (!parse_bp(v, &ja)) return usage(); have_ja = 1; }
         else return usage();
         ++i;
     }
-    if (data == NULL || kind == NULL || n_sets == 0 || parent == NULL || candidate == NULL || !have_before ||
-        !have_after || round == 0)
+    if (data == NULL || kind == NULL || n_lessons == 0 || n_holdout == 0 || parent == NULL || candidate == NULL ||
+        round == 0)
         return usage();
-    if (!hex64_ok(parent) || !hex64_ok(candidate)) {
-        fprintf(stderr, "mj_hemi: --parent and --candidate must be 64 lowercase hex digits\n");
+    memset(&in, 0, sizeof in);
+    if (strcmp(kind, "actor") == 0) in.kind = MJ_HEMI_GATE_ACTOR;
+    else if (strcmp(kind, "watcher") == 0) in.kind = MJ_HEMI_GATE_WATCHER;
+    else if (strcmp(kind, "swap") == 0) in.kind = MJ_HEMI_GATE_SWAP;
+    else return usage();
+    if ((in.kind == MJ_HEMI_GATE_SWAP) != (other != NULL)) return usage();
+    if (!hex64_ok(parent) || !hex64_ok(candidate) || (other && !hex64_ok(other))) {
+        fprintf(stderr, "mj_hemi: --parent, --candidate and --other must be 64 lowercase hex digits\n");
         return 2;
     }
-    if (strcmp(kind, "actor") == 0) keep = after > before;
-    else if (strcmp(kind, "watcher") == 0) {
-        if (!have_jb || !have_ja) return usage();
-        keep = ja > jb && after >= before;
-    } else if (strcmp(kind, "swap") == 0) {
-        if (!have_other) return usage();
-        keep = after > before && after > other;
-    } else return usage();
-    if (strlen(note) > 160) {
-        fprintf(stderr, "mj_hemi: --note is longer than 160 characters\n");
+    if (strlen(note) > 160 || !mj_text_valid(note)) {
+        fprintf(stderr, "mj_hemi: --note must be at most 160 printable characters, without '|'\n");
         return 2;
     }
+    mj_hex_decode(parent, 64, in.parent);
+    mj_hex_decode(candidate, 64, in.candidate);
+    if (other) mj_hex_decode(other, 64, in.other);
     mj_budget_init(&b, (size_t)1 << 31);
-    for (i = 0; i < n_sets; ++i) {
-        mj_hemi_set s;
-        mj_hemi_tally t;
+    in.budget = &b;
+    for (k = 0; k < n_lessons + n_holdout; ++k) {
+        const char *path = k < n_lessons ? lesson_paths[k] : holdout_paths[k - n_lessons];
         uint8_t sha[MJ_SHA256_LEN];
         char h[2 * MJ_SHA256_LEN + 1];
-        size_t n = strlen(inputs), m = strlen(tallies);
-        mj_status st = mj_hemi_load(sets[i], &b, &s, sha);
+        size_t n = strlen(inputs);
+        st = mj_hemi_load(path, &b, &sets[k], sha);
         if (st != MJ_OK) {
-            fprintf(stderr, "mj_hemi: %s: %s\n", sets[i], mj_status_name(st));
-            return 1;
+            fprintf(stderr, "mj_hemi: %s: %s\n", path, mj_status_name(st));
+            goto done;
         }
-        mj_hemi_tally_set(&s, &t);
+        ++n_loaded;
+        if (k < n_lessons) in.lessons[in.n_lessons++] = &sets[k];
+        else in.holdout[in.n_holdout++] = &sets[k];
         hex(sha, MJ_SHA256_LEN, h);
         h[12] = 0;
-        snprintf(inputs + n, sizeof inputs - n, "%sset-%s", i ? "," : "", h);
-        snprintf(tallies + m, sizeof tallies - m, "%spass %u: %u steps, %u cleared, judged right %u of %u",
-                 i ? "; " : "", (unsigned)s.h.pass, (unsigned)t.steps, (unsigned)t.cleared,
-                 (unsigned)(t.agree_right + t.object_right),
-                 (unsigned)(t.agree_right + t.agree_wrong + t.object_right + t.object_wrong));
-        mj_hemi_set_free(&s);
+        snprintf(inputs + n, sizeof inputs - n, "%s%s-%s", k ? "," : "", k < n_lessons ? "lesson" : "holdout", h);
     }
-    if (mj_path_join(ledger, sizeof ledger, data, "hemispheres.mjl") != MJ_OK) return 2;
+    st = mj_hemi_gate_decide(&in, &g);
+    if (st != MJ_OK) {
+        fprintf(stderr, "mj_hemi: refused: %s\n", st == MJ_E_INVAL ? g.why : mj_status_name(st));
+        rc = 2;
+        goto done;
+    }
+    if (mj_path_join(ledger, sizeof ledger, data, "hemispheres.mjl") != MJ_OK) { rc = 2; goto done; }
     mj_ledger_record_init(&rec);
     snprintf(rec.dream_id, sizeof rec.dream_id, "real-%s-%03u", kind, (unsigned)round);
     if (mj_utc_now(when) == MJ_OK) memcpy(rec.when, when, sizeof when);
-    snprintf(rec.trigger, sizeof rec.trigger, "%s", strcmp(kind, "swap") == 0 ? "hemispheres" : "classroom");
+    snprintf(rec.trigger, sizeof rec.trigger, "%s", in.kind == MJ_HEMI_GATE_SWAP ? "hemispheres" : "classroom");
     memcpy(rec.grader, "answer-key", 11);
     snprintf(rec.inputs, sizeof rec.inputs, "%s", inputs);
     snprintf(rec.weights_before, sizeof rec.weights_before, "%.12s", parent);
     snprintf(rec.weights_candidate, sizeof rec.weights_candidate, "%.12s", candidate);
-    snprintf(rec.edit, sizeof rec.edit, "%s", tallies);
-    rec.score_before_bp = before;
-    rec.score_after_bp = after;
-    if (strcmp(kind, "watcher") == 0)
-        snprintf(rec.gates, sizeof rec.gates, "judge=%s,play=%s", ja > jb ? "pass" : "fail",
-                 after >= before ? "pass" : "fail");
-    else if (strcmp(kind, "swap") == 0)
-        snprintf(rec.gates, sizeof rec.gates, "beats-first=%s,beats-second=%s", after > before ? "pass" : "fail",
-                 after > other ? "pass" : "fail");
-    else snprintf(rec.gates, sizeof rec.gates, "holdout=%s", keep ? "pass" : "fail");
-    memcpy(rec.outcome, keep ? "dry-run-pass" : "rolled-back", keep ? 13 : 12);
-    if (strcmp(kind, "watcher") == 0)
-        snprintf(rec.notes, sizeof rec.notes, "judgments %u->%u bp; own play %u->%u bp; %s", (unsigned)jb,
-                 (unsigned)ja, (unsigned)before, (unsigned)after, note);
-    else if (strcmp(kind, "swap") == 0)
-        snprintf(rec.notes, sizeof rec.notes, "parents %u and %u bp, child %u bp; %s", (unsigned)before,
-                 (unsigned)other, (unsigned)after, note);
-    else snprintf(rec.notes, sizeof rec.notes, "%u->%u bp; %s", (unsigned)before, (unsigned)after, note);
+    {
+        mj_hemi_tally t;
+        uint32_t steps = 0, cleared = 0;
+        for (k = 0; k < in.n_lessons; ++k) {
+            mj_hemi_tally_set(in.lessons[k], &t);
+            steps += t.steps;
+            cleared += t.cleared;
+        }
+        snprintf(rec.edit, sizeof rec.edit, "%u lesson steps, %u cleared; scored by Mjolnir on %u held-out states",
+                 (unsigned)steps, (unsigned)cleared, (unsigned)g.states);
+    }
+    rec.score_before_bp = in.kind == MJ_HEMI_GATE_SWAP && g.other_bp > g.before_bp ? g.other_bp : g.before_bp;
+    rec.score_after_bp = g.after_bp;
+    if (in.kind == MJ_HEMI_GATE_WATCHER)
+        snprintf(rec.gates, sizeof rec.gates, "judge=%s,play=%s", g.judge_after_bp > g.judge_before_bp ? "pass" : "fail",
+                 g.after_bp >= g.before_bp ? "pass" : "fail");
+    else if (in.kind == MJ_HEMI_GATE_SWAP)
+        snprintf(rec.gates, sizeof rec.gates, "beats-first=%s,beats-second=%s", g.after_bp > g.before_bp ? "pass" : "fail",
+                 g.after_bp > g.other_bp ? "pass" : "fail");
+    else snprintf(rec.gates, sizeof rec.gates, "holdout=%s", g.keep ? "pass" : "fail");
+    memcpy(rec.outcome, g.keep ? "dry-run-pass" : "rolled-back", g.keep ? 13 : 12);
+    if (in.kind == MJ_HEMI_GATE_WATCHER)
+        snprintf(rec.notes, sizeof rec.notes, "judgments %u->%u bp; own play %u->%u bp; %s", (unsigned)g.judge_before_bp,
+                 (unsigned)g.judge_after_bp, (unsigned)g.before_bp, (unsigned)g.after_bp, note);
+    else if (in.kind == MJ_HEMI_GATE_SWAP)
+        snprintf(rec.notes, sizeof rec.notes, "parents %u and %u bp, child %u bp; %s", (unsigned)g.before_bp,
+                 (unsigned)g.other_bp, (unsigned)g.after_bp, note);
+    else snprintf(rec.notes, sizeof rec.notes, "%u->%u bp; %s", (unsigned)g.before_bp, (unsigned)g.after_bp, note);
     if (mj_fs_mkdir(data) != MJ_OK || mj_ledger_append(ledger, &b, &rec) != MJ_OK ||
         mj_ledger_verify_file(ledger, &b, &ls, &bad) != MJ_OK) {
         fprintf(stderr, "mj_hemi: could not journal the decision in %s\n", ledger);
-        return 1;
+        rc = 1;
+        goto done;
     }
-    printf("%s: %s (journal %s, %llu records)\n", rec.dream_id, keep ? "keep" : "roll back", ledger,
+    if (in.kind == MJ_HEMI_GATE_WATCHER)
+        printf("%s: judgments %u -> %u bp, own play %u -> %u bp on %u held-out states\n", rec.dream_id,
+               (unsigned)g.judge_before_bp, (unsigned)g.judge_after_bp, (unsigned)g.before_bp, (unsigned)g.after_bp,
+               (unsigned)g.states);
+    else if (in.kind == MJ_HEMI_GATE_SWAP)
+        printf("%s: parents %u and %u bp, child %u bp on %u held-out states\n", rec.dream_id, (unsigned)g.before_bp,
+               (unsigned)g.other_bp, (unsigned)g.after_bp, (unsigned)g.states);
+    else
+        printf("%s: %u -> %u bp on %u held-out states\n", rec.dream_id, (unsigned)g.before_bp, (unsigned)g.after_bp,
+               (unsigned)g.states);
+    printf("%s: %s (journal %s, %llu records)\n", rec.dream_id, g.keep ? "keep" : "roll back", ledger,
            (unsigned long long)ls.count);
-    return keep ? 0 : 3;
+    rc = g.keep ? 0 : 3;
+done:
+    for (k = 0; k < n_loaded; ++k) mj_hemi_set_free(&sets[k]);
+    return rc;
 }
 
 int main(int argc, char **argv) {

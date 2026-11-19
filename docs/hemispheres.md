@@ -14,7 +14,7 @@ PCHIE is the world and the answer key: it runs the model, knows the legal moves 
 1. **The answer key is always the final judge.** A watcher's opinion counts only where the answer key backs it, and only as far as that watcher has earned trust in the same lesson. Two models can never talk each other into the same mistake.
 2. **Nothing changes in place.** Every update is made on a copy. The parents are snapshotted with their SHA-256 before anything runs, and every rollback checks the snapshot against that checksum before restoring it.
 3. **Kept only if better on unseen worlds.** All gates use holdout worlds that neither side trained on.
-4. **Everything is journaled.** Each lesson and round writes its sample sets (MJHEMI1), a `disagreements.tsv` and a hash-chained ledger record, so every decision can be replayed.
+4. **Everything is journaled.** Each lesson and round writes its sample sets (MJHEMI2), a `disagreements.tsv` and a hash-chained ledger record, so every decision can be replayed.
 5. **Any model can take part.** A hemisphere is two functions: give a distribution over the legal moves of a state, and say what you are. The toy policy, a dense transformer, a mixture-of-experts model or a state-space hybrid all fit the same slot. Nothing assumes one model's layer layout.
 
 ## Stage 1: the classroom
@@ -131,7 +131,8 @@ sequenceDiagram
 
 - The answer key is the only source of a target's sign. Watcher moves are hints, weighted by earned trust and by the watcher's confidence.
 - Model originals are read-only. Every edit lands on a checksummed working copy, and the original's checksum is the rollback.
-- Every sample set is MJHEMI1 (see [FORMATS.md](FORMATS.md)): versioned, bounds-checked on read, records strictly ordered, sealed with a SHA-256. The parser has a fuzz target (`hemi` in `mj_fuzz`), and the classroom's watcher lessons are fuzzed on every parsed set.
+- Every sample set is MJHEMI2 (see [FORMATS.md](FORMATS.md)): versioned, bounds-checked on read, records strictly ordered, sealed with a SHA-256. The parser has a fuzz target (`hemi` in `mj_fuzz`), and the classroom's watcher lessons are fuzzed on every parsed set.
+- No score is taken on anyone's word. For real models, Mjolnir works every score out itself from holdout sets that are bound by SHA-256 to the models in the decision, and refuses evidence that does not hold together (see [The gate for real models](#the-gate-for-real-models)).
 - No locks. A round runs on one thread. The only hand-offs are phase boundaries: lesson or passes, combine, train, evaluate, journal.
 - The GPU only scores. The holdout scorer has a CUDA path (`--gpu`) that gives the same answers bit for bit as the CPU path; the tests check this on every build with CUDA.
 - Every round is repeatable bit for bit from its seed, on Windows and on Linux.
@@ -191,9 +192,46 @@ What this shows, honestly:
 
 The hemisphere interface is the seam for real models. A real hemisphere only has to give a distribution over the legal moves of a PCHIE world state. For a text model, that is the next-token probabilities of the move names, renormalised over the legal moves. The left and right can be the same network at two precisions (for example a ternary copy and the full-precision original), which is how Little Super Nemo (from Nemotron 3.5 Super VL, a Mamba-2, mixture-of-experts and attention hybrid) is meant to take part. Weight edits for real models go through Mjolnir's working copy, never the original. See [C-PORT.md](C-PORT.md) for the real-weight path.
 
-For a real model, the world outside Mjolnir plays the rounds and asks `mj_hemi gate` for every decision. The gate reads the round's sample sets (refusing any whose seal or bounds fail), applies the same rules as the toy stages (actor: better on holdout; watcher: more judgments confirmed by the answer key and no worse own play; swap: the child beats both parents), and appends a `real-<kind>-NNN` record to `hemispheres.mjl`. It exits 0 to keep and 3 to roll back.
+### The gate for real models
 
-The first real run used Bolt E4B through PCHIE, with the ternary tail of layers 38 to 41 as the left and the Q4 tail as the right, and the line between them as the only edit. Results on 117 holdout states (basis points cleared by the answer key):
+Mjolnir cannot run a large model itself, so for a real model the world outside Mjolnir plays the rounds and asks `mj_hemi gate` (the `mj_hemi_gate` library) for every decision. It does not pass any score. It passes sealed sample sets, and Mjolnir works the scores out from them:
+
+- **lesson sets** (purpose 1): what the round learned from;
+- **holdout sets** (purpose 2): the same held-out states played by each model the decision needs, every move graded by the answer key, plus, for a watcher, the lesson's actor watched by the old and the new watcher.
+
+```mermaid
+flowchart LR
+    W[World and answer key<br/>PCHIE] -->|lesson sets| G
+    W -->|holdout sets, one per model| G
+    G[mj_hemi gate] --> B{Bound to the models?<br/>Same states?<br/>Moves match their distributions?<br/>One grade per move?}
+    B -->|no| X[Refused with the reason<br/>exit 2, nothing journaled]
+    B -->|yes| S[Mjolnir scores every model<br/>on the held-out states]
+    S --> R{The stage's rule}
+    R -->|better| K[Keep, exit 0]
+    R -->|not better| RB[Roll back, exit 3]
+    K --> J[(hemispheres.mjl)]
+    RB --> J
+```
+
+Every set names the full SHA-256 of the model that acted and the model that watched (for a real model, the SHA-256 of its working copy's edited weights). The gate refuses, with the reason and without journaling anything, when:
+
+- a lesson set was not played (actor stage) or watched (watcher stage) by the parent, or for a swap is not between the two parents, or a swap has no pass played by each parent;
+- a holdout set is marked as a lesson, or the other way round, or a lesson uses the holdout seed;
+- the holdout sets are not on the very same states (episode, step and features);
+- a recorded move is not the one its recorded distribution picks, or a verdict does not match the watcher's distribution;
+- the answer key graded the same move on the same state two ways in two sets;
+- two sets played by the same model disagree on its play;
+- there is no holdout set played by a model the decision needs.
+
+Then the rules are the toy stages' rules on Mjolnir's own numbers: an actor is kept when it plays the held-out states better than its parent; a watcher when the answer key confirms more of its judgments of the lesson's actor and its own play is no worse; a swap child when it beats both parents. Exit 0 keeps, 3 rolls back, 2 refuses, 1 means a set could not be read. The rules and every refusal are tested in `test_hemi`, and the gate runs inside the hemisphere fuzz target.
+
+What the gate still has to take on trust is the world's answer key itself: Mjolnir checks that the key is consistent across sets, not that each grade is right. That is by design (the answer key is the final judge), and it is why the key lives in PCHIE's deterministic, tested world code.
+
+### Results on Bolt E4B
+
+The reviewed run (Mjolnir working out every score from holdout sets bound to each tail's SHA-256) is being repeated after the review fixes; its results will replace this paragraph.
+
+**The first run, before the review fixes** (PCHIE passed the scores on the command line; kept as history). Bolt E4B through PCHIE, with the ternary tail of layers 38 to 41 as the left and the Q4 tail as the right, and the line between them as the only edit. Results on 117 holdout states (basis points cleared by the answer key):
 
 | Stage | What happened | Mjolnir |
 |---|---|---|

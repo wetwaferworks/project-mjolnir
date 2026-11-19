@@ -19,7 +19,7 @@
  *     the toy policy here, a transformer, a mixture of experts or a state-space
  *     model behind PCHIE's runtime);
  *   - the verdict rule;
- *   - the sample-set file format MJHEMI1 (see docs/FORMATS.md);
+ *   - the sample-set file format MJHEMI2 (see docs/FORMATS.md);
  *   - the combiner (targets from both sets, weighted by the answer key);
  *   - the round driver for the toy policy, with its keep-or-roll-back gate
  *     and the journal entry.
@@ -44,13 +44,17 @@ extern "C" {
 #define MJ_HEMI_MAX_ACTIONS 16u
 #define MJ_HEMI_MAX_FEATURES 64u
 #define MJ_HEMI_MAX_RECORDS (1u << 20)
-#define MJ_HEMI_HEADER_BYTES 96u
+#define MJ_HEMI_HEADER_BYTES 128u
 #define MJ_HEMI_TRAILER_BYTES 32u /* SHA-256 of everything before it */
 #define MJ_HEMI_RECORD_FIXED 14u
 #define MJ_HEMI_PROB_ONE 65535u   /* probabilities are stored as p * 65535, rounded */
-#define MJ_HEMI_FINGERPRINT 16u   /* first 16 bytes of the model's SHA-256 */
+#define MJ_HEMI_FINGERPRINT 32u   /* the SHA-256 of the model (or of its working copy) */
 
 typedef enum mj_hemi_side { MJ_HEMI_LEFT = 0, MJ_HEMI_RIGHT = 1 } mj_hemi_side;
+
+/* What a set is for. A lesson is learned from; a holdout set is only scored, and the states it was played
+ * on are never in a lesson. */
+typedef enum mj_hemi_purpose { MJ_HEMI_LESSON = 1, MJ_HEMI_HOLDOUT = 2 } mj_hemi_purpose;
 
 typedef enum mj_hemi_world {
     MJ_HEMI_WORLD_TOY_MAZE = 1, /* Mjolnir's toy corridors */
@@ -105,7 +109,7 @@ typedef struct mj_hemi_verdict {
 void mj_hemi_judge(const uint16_t watcher_probs[MJ_HEMI_MAX_ACTIONS], uint32_t n_actions, uint32_t legal,
                    uint32_t actor_move, mj_hemi_verdict *out);
 
-/* ---- sample sets (MJHEMI1) ------------------------------------------------- */
+/* ---- sample sets (MJHEMI2) ------------------------------------------------- */
 typedef struct mj_hemi_header {
     uint32_t round;
     uint8_t pass;          /* 1 or 2 */
@@ -113,6 +117,7 @@ typedef struct mj_hemi_header {
     uint8_t world;         /* mj_hemi_world */
     uint8_t n_features;    /* 1..64 */
     uint8_t n_actions;     /* 2..16 */
+    uint8_t purpose;       /* mj_hemi_purpose */
     uint64_t seed;         /* the worlds' seed */
     uint8_t actor[MJ_HEMI_FINGERPRINT];
     uint8_t observer[MJ_HEMI_FINGERPRINT];
