@@ -117,6 +117,16 @@ mj_status mj_file_identity(const char *path, mj_file_id *out) {
     return MJ_OK;
 }
 
+mj_status mj_file_handle_identity(mj_file *f, mj_file_id *out) {
+    BY_HANDLE_FILE_INFORMATION fi;
+    if (f == NULL || f->h == -1 || !GetFileInformationByHandle((HANDLE)f->h, &fi)) return MJ_E_IO;
+    out->dev = fi.dwVolumeSerialNumber;
+    out->ino = ((uint64_t)fi.nFileIndexHigh << 32) | fi.nFileIndexLow;
+    out->nlink = fi.nNumberOfLinks;
+    out->size = ((uint64_t)fi.nFileSizeHigh << 32) | fi.nFileSizeLow;
+    return MJ_OK;
+}
+
 static mj_status real_existing(const char *path, char *out, size_t cap) {
     HANDLE h;
     wchar_t r[MJ_PATH_MAX];
@@ -257,6 +267,16 @@ mj_status mj_file_identity(const char *path, mj_file_id *out) {
     return MJ_OK;
 }
 
+mj_status mj_file_handle_identity(mj_file *f, mj_file_id *out) {
+    struct stat s;
+    if (f == NULL || f->h == -1 || fstat((int)f->h, &s) != 0) return MJ_E_IO;
+    out->dev = (uint64_t)s.st_dev;
+    out->ino = (uint64_t)s.st_ino;
+    out->nlink = (uint64_t)s.st_nlink;
+    out->size = (uint64_t)s.st_size;
+    return MJ_OK;
+}
+
 static mj_status real_existing(const char *path, char *out, size_t cap) {
     char r[PATH_MAX];
     size_t l;
@@ -381,4 +401,29 @@ mj_status mj_fs_copy_new(const char *src, const char *dst) {
     mj_file_close(&out);
     if (st != MJ_OK) (void)mj_fs_remove(dst);
     return st;
+}
+
+int mj_file_same(const mj_file_id *a, const mj_file_id *b) { return a->dev == b->dev && a->ino == b->ino; }
+
+mj_status mj_file_sha256(mj_file *f, uint8_t out[MJ_SHA256_LEN], uint64_t *size) {
+    const size_t chunk = MJ_COPY_CHUNK;
+    uint64_t total = 0, done = 0;
+    mj_sha256_ctx c;
+    uint8_t *buf;
+    mj_status st = mj_file_size(f, &total);
+    if (st != MJ_OK) return st;
+    buf = (uint8_t *)malloc(chunk);
+    if (buf == NULL) return MJ_E_LIMIT;
+    mj_sha256_init(&c);
+    while (done < total && st == MJ_OK) {
+        size_t n = (total - done) > chunk ? chunk : (size_t)(total - done);
+        st = mj_file_pread(f, done, buf, n);
+        if (st == MJ_OK) mj_sha256_update(&c, buf, n);
+        done += n;
+    }
+    free(buf);
+    if (st != MJ_OK) return st;
+    mj_sha256_final(&c, out);
+    if (size) *size = total;
+    return MJ_OK;
 }

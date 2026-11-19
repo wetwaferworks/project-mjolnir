@@ -412,7 +412,8 @@ static mj_status raw_header(const char *path, mj_budget *b, uint8_t **out, size_
     return st;
 }
 
-static mj_status model_paths(const char *original, const char *working, char *o, char *w, mj_wc_result *res) {
+static mj_status model_paths(const char *original, const char *working, char *o, char *w, mj_wc_result *res,
+                             mj_file_id *io_out, mj_file_id *iw_out) {
     mj_file_id io, iw;
     mj_status st;
     if ((st = mj_wc_guard(original, working)) != MJ_OK) {
@@ -433,6 +434,8 @@ static mj_status model_paths(const char *original, const char *working, char *o,
         reason(res, "the working model file is hard-linked; refusing to write through it", NULL);
         return MJ_E_FORBIDDEN;
     }
+    if (io_out) *io_out = io;
+    if (iw_out) *iw_out = iw;
     return MJ_OK;
 }
 
@@ -500,6 +503,7 @@ mj_status mj_wc_checkout(mj_store *store, const char *version_id, const char *or
     mj_status st;
     char cur[MJ_ID_MAX + 1];
     int have_state = 0, files_open = 0;
+    mj_file_id id_o, id_w, now_id;
 
     memset(res, 0, sizeof *res);
     memset(&hdr, 0, sizeof hdr);
@@ -508,7 +512,7 @@ mj_status mj_wc_checkout(mj_store *store, const char *version_id, const char *or
     sums.budget = touched.budget = b;
     fo.h = fw.h = -1;
     if (store == NULL || version_id == NULL || base_sha == NULL || opt == NULL || b == NULL) return MJ_E_INVAL;
-    if ((st = model_paths(original, working, o_file, w_file, res)) != MJ_OK) return st;
+    if ((st = model_paths(original, working, o_file, w_file, res, &id_o, &id_w)) != MJ_OK) return st;
     if ((st = mj_st_read_header(o_file, b, &hdr)) != MJ_OK) {
         reason(res, "the original model file's header does not check out", NULL);
         return st;
@@ -589,6 +593,29 @@ mj_status mj_wc_checkout(mj_store *store, const char *version_id, const char *or
         }
     }
 
+    /* Every tensor is restored from the original, so the original must still be byte for byte the file the base
+     * record checksummed. Hash it through the very handle the restore reads from, and check that handle is the
+     * file checked by name above, so nothing can swap or change it between the check and the reads. */
+    files_open = 1;
+    if ((st = mj_file_open(&fo, o_file, 0)) != MJ_OK) { reason(res, "cannot open the original model file", NULL); goto out; }
+    if ((st = mj_file_handle_identity(&fo, &now_id)) != MJ_OK) goto out;
+    if (!mj_file_same(&now_id, &id_o)) {
+        reason(res, "the original model file changed between the check and the open", NULL);
+        st = MJ_E_FORBIDDEN;
+        goto out;
+    }
+    {
+        uint8_t h[MJ_SHA256_LEN];
+        char hex[MJ_SHA256_HEX];
+        if ((st = mj_file_sha256(&fo, h, NULL)) != MJ_OK) { reason(res, "cannot checksum the original model file", NULL); goto out; }
+        mj_hex_encode(h, MJ_SHA256_LEN, hex);
+        if (strcmp(hex, base_sha) != 0) {
+            reason(res, "the original model file no longer matches the base record; nothing was written", NULL);
+            st = MJ_E_CORRUPT;
+            goto out;
+        }
+    }
+
     /* the dirty marker goes down before the first byte changes */
     if ((st = mj_path_join(dirty_path, sizeof dirty_path, working, MJ_WC_DIRTY_FILE)) != MJ_OK) goto out;
     if ((st = write_kv_file(working, MJ_WC_DIRTY_FILE, "MJDIRTY1", state.applied, &touched)) != MJ_OK) {
@@ -599,9 +626,14 @@ mj_status mj_wc_checkout(mj_store *store, const char *version_id, const char *or
     hashes = (uint8_t *)mj_balloc(b, (touched.n ? touched.n : 1) * MJ_SHA256_LEN);
     buf = (uint8_t *)mj_balloc(b, CHUNK);
     if (hashes == NULL || buf == NULL) { st = MJ_E_LIMIT; goto out; }
-    if ((st = mj_file_open(&fo, o_file, 0)) != MJ_OK) goto out;
     if ((st = mj_file_open(&fw, w_file, 1)) != MJ_OK) { reason(res, "cannot open the working model file for writing", NULL); goto out; }
-    files_open = 1;
+    /* the same checks as by name, now on the handle that writes */
+    if ((st = mj_file_handle_identity(&fw, &now_id)) != MJ_OK) goto out;
+    if (!mj_file_same(&now_id, &id_w) || mj_file_same(&now_id, &id_o) || now_id.nlink != 1) {
+        reason(res, "the working model file changed, is the original, or is hard-linked; refusing to write", NULL);
+        st = MJ_E_FORBIDDEN;
+        goto out;
+    }
     for (i = 0; i < touched.n && st == MJ_OK; ++i) {
         const mj_st_tensor *t = mj_st_find(&hdr, touched.v[i]);
         if (!mj_names_has(&sums, touched.v[i])) {

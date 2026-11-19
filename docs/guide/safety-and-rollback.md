@@ -12,7 +12,7 @@ Versions are never overwritten, not even after they are retired. Retention keeps
 
 ## Rules every stage keeps
 
-- The original download is never written, only read and checksummed.
+- The original download is never written, only read and checksummed. Every apply and rollback hashes it again first and refuses, before writing anything, if it no longer matches the base record.
 - An edited model is not wired into PCHIE's official runners, chat, or any official record.
 - Lessons from failed runs are not injected into prompts without JD's go.
 - Run logs are read-only. Replays never write beside their source.

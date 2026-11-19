@@ -37,6 +37,13 @@ typedef struct mj_file_id {
 
 /* Identity of the file at path (links followed). MJ_E_NOTFOUND if missing. */
 mj_status mj_file_identity(const char *path, mj_file_id *out);
+/* Identity of an open file, so a check made by name can be repeated on the
+ * handle actually used (closing the gap between check and open). */
+mj_status mj_file_handle_identity(mj_file *f, mj_file_id *out);
+/* 1 when a and b are the same file (volume and file index). */
+int mj_file_same(const mj_file_id *a, const mj_file_id *b);
+/* Stream the whole open file through SHA-256 (size in *size when not NULL). */
+mj_status mj_file_sha256(mj_file *f, uint8_t out[MJ_SHA256_LEN], uint64_t *size);
 
 /* The canonical absolute path of path. When path itself does not exist yet,
  * its parent is resolved and the last name appended. Separators are '/'. */

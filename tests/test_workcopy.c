@@ -412,6 +412,43 @@ int main(void) {
     sha_of(orig, MJ_WC_MODEL_FILE, w_sha);
     CHECK(strcmp(o_sha, w_sha) == 0); /* the original never changed */
 
+    {   /* the original changes after register (a disk error, a stray write): apply and rollback refuse before
+         * writing anything, so "base" can never be restored from a changed source */
+        char of[MJ_PATH_MAX], dirty[MJ_PATH_MAX];
+        mj_file f;
+        uint8_t one, flipped;
+        uint64_t at = 0;
+        int lines = count_lines(rp.ledger);
+        CHECK_ST(mj_real_apply(orig, work, data, "e1", &opt, &b, &res), MJ_OK);
+        lines = count_lines(rp.ledger);
+        sha_of(work, MJ_WC_MODEL_FILE, base); /* reuse: the working file now (e1 applied) */
+        mj_path_join(of, sizeof of, orig, MJ_WC_MODEL_FILE);
+        (void)mj_fs_set_writable(of);
+        CHECK_ST(mj_file_open(&f, of, 1), MJ_OK);
+        CHECK_ST(mj_file_size(&f, &at), MJ_OK);
+        at -= 1; /* the last byte of tensor data */
+        CHECK_ST(mj_file_pread(&f, at, &one, 1), MJ_OK);
+        flipped = (uint8_t)(one ^ 0x01);
+        CHECK_ST(mj_file_pwrite(&f, at, &flipped, 1), MJ_OK);
+        mj_file_close(&f);
+        CHECK_ST(mj_real_apply(orig, work, data, "base", &opt, &b, &res), MJ_E_CORRUPT);
+        CHECK(strstr(res.reason, "no longer matches the base record") != NULL);
+        CHECK_ST(mj_real_apply(orig, work, data, "e1", &opt, &b, &res), MJ_E_CORRUPT);
+        sha_of(work, MJ_WC_MODEL_FILE, w_sha);
+        CHECK(strcmp(base, w_sha) == 0);        /* the working copy was not touched */
+        mj_path_join(dirty, sizeof dirty, work, MJ_WC_DIRTY_FILE);
+        CHECK(!mj_fs_exists(dirty));            /* not even the dirty marker */
+        CHECK_EQ(count_lines(rp.ledger), lines); /* and nothing journaled */
+        /* put the byte back: rollback works again and is byte-identical */
+        CHECK_ST(mj_file_open(&f, of, 1), MJ_OK);
+        CHECK_ST(mj_file_pwrite(&f, at, &one, 1), MJ_OK);
+        mj_file_close(&f);
+        (void)mj_fs_set_readonly(of);
+        CHECK_ST(mj_real_apply(orig, work, data, "base", &opt, &b, &res), MJ_OK);
+        sha_of(work, MJ_WC_MODEL_FILE, w_sha);
+        CHECK(strcmp(o_sha, w_sha) == 0);
+    }
+
     /* the working folder must be empty or identical */
     write_file(work, "extra.txt", "x", 1);
     wipe(work);
