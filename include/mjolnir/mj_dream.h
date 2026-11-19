@@ -4,14 +4,14 @@
  *   1. refuse unless dry-run (stage M0 never changes live weights)
  *   2. check the ledger chain; refuse to dream on a broken chain
  *   3. load and verify the live weights named by HEAD
- *   4. read the last dream's failure note and adapt (decision 10)
+ *   4. read the last dream's failure note and adapt (design principle 10)
  *   5. snapshot the live weights into the store: the rollback point
  *   6. dream: reward-weighted nudges on a copy, old memories mixed in
  *   7. watch and rest: partial-credit scoring of the candidate
  *   8. verify: step, shift, golden and improvement gates
  *   9. record the candidate in the store (never as HEAD in M0)
  *  10. check HEAD is unchanged, then append the dream to the ledger
- * Toy weights only. Integration (moving HEAD) is M1 work behind JD's go.
+ * Toy weights only. Integration (moving HEAD) is M1 work.
  * MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works. */
 #ifndef MJ_DREAM_H
 #define MJ_DREAM_H

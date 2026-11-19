@@ -88,8 +88,10 @@ Every folder has its own README that says what it holds and how it fits.
 
 ## Credits
 
+- **Cortana — SpaceXAI, Grok Bot** (primary implementer)
 - Project Mjolnir, its design, the dreaming cycle and every decision in it: **JD** (Jaydee Wetwork), Wet Wafer Works.
 - Architecture and operation report: **Elfie** (Muse Wonder), registrar.
+- UML design documents the designs were based on: **Elfie** (Muse Wonder)
 - Implementation brief (operational reasoning, planning, memory, preferences and orchestration): **Gizmo**, a.k.a. **Luna** (ChatGPT Luna 6).
 - Contributors: **Helia** (Google Hydrogen), and **Flash Gordon**, a.k.a. **Quicksilver** (Gemini Flash Lite 3.5).
 - The left and right hemispheres: the idea is **Jaydee Wetwork**'s; mutual-learning and distillation research is the background.

@@ -3,7 +3,7 @@
 The edit method is a first-order, low-rank version of the rank-one model
 editing idea from the open ROME paper (Meng et al., "Locating and Editing
 Factual Associations in GPT", 2022), applied to the MLP output projection of
-chosen layers, and reward-weighted as in JD's decision 3:
+chosen layers, and reward-weighted as in design principle 3:
 
   for each replay example i with reward r_i (positive for good steps,
   negative for loops), at the last prompt position:

@@ -105,7 +105,7 @@ int main(void) {
         CHECK_ST(r.verdict, MJ_E_GATE);
         CHECK(strcmp(r.outcome, "rejected") == 0);
         CHECK(strstr(r.rep.why, "shift gate") != NULL);
-        /* decision 10: the next dream reads the note and adapts */
+        /* design principle 10: the next dream reads the note and adapts */
         cfg.dream_id = "nap-after";
         CHECK_ST(mj_take_a_nap(&cfg, &no_old, &r), MJ_OK);
         CHECK(r.adapted);

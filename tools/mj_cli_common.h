@@ -36,7 +36,7 @@ static int mj_cli_parse(int argc, char **argv, mj_cli *o, const char *usage) {
         *slot = argv[++i];
     }
     if (o->live) {
-        fprintf(stderr, "refused: stage M0 is dry-run only. Live weight edits wait for JD's go.\n");
+        fprintf(stderr, "refused: stage M0 is dry-run only. Live weight edits are not part of M0.\n");
         return 3;
     }
     if (!o->dry_run || o->store == NULL || o->ledger == NULL || o->id == NULL) {

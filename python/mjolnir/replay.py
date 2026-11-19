@@ -11,7 +11,7 @@ This module opens those files for reading only, checks the chain, and turns
 each run into a replay: a list of steps with an automatic partial-credit
 label. It never writes next to the source files.
 
-Automatic labels follow JD's partial-credit rule (decision 8):
+Automatic labels follow the partial-credit rule (design principle 8):
   productive  the step earned a reward (key or goal)
   good        the step reached ground the run had not stood on before
   not-yet     the step went back to ground already visited (a loop)

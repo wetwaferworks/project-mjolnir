@@ -96,7 +96,7 @@ mj_status mj_dream_run(const mj_dream_cfg *c, const mj_dream_material *m, mj_dre
     mj_bfree(&b, blob, blen ? blen : 1);
     if (st != MJ_OK) return st;
 
-    /* decision 10: the dreamer learns why the last dream failed */
+    /* design principle 10: the dreamer learns why the last dream failed */
     ucfg = c->update;
     if (ls.count > 0 && strcmp(ls.last.outcome, "rejected") == 0 &&
         (strstr(ls.last.notes, "shift gate") != NULL || strstr(ls.last.notes, "golden gate") != NULL)) {

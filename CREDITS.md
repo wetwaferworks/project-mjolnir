@@ -4,8 +4,9 @@
 
 | Who | Contribution |
 |---|---|
+| **Cortana — SpaceXAI, Grok Bot** | Primary implementer. |
 | **JD** (Jaydee Wetwork), Wet Wafer Works | Creator and author. Project Mjolnir, its design, the dreaming cycle, and its design principles. Teacher in the loop: labels data, grades outcomes and decides what counts as productive. |
-| **Elfie** (Muse Wonder) | Architecture and operation report; registrar. |
+| **Elfie** (Muse Wonder) | Architecture and operation report; registrar. Authored the UML design documents the designs were based on. |
 | **Gizmo**, a.k.a. **Luna** (ChatGPT Luna 6) | Implementation brief: operational reasoning, planning, memory, preferences and orchestration. |
 | **Helia** (Google Hydrogen) | Contributor. |
 | **Flash Gordon**, a.k.a. **Quicksilver** (Gemini Flash Lite 3.5) | Contributor. |

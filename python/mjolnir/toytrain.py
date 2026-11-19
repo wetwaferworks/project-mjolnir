@@ -5,10 +5,10 @@ The dream follows the M0 cycle on the toy model:
   2. snapshot them, so the dream can always be rolled back
   3. build the dream batch: replay steps with JD's grade where he gave one,
      otherwise the automatic partial-credit label, with older memories (the
-     golden set) mixed in after every new sample (decision 5)
+     golden set) mixed in after every new sample (design principle 5)
   4. train a float copy on the GPU: raise the likelihood of what was
-     productive and lower the likelihood of what was not (decision 3),
-     clamping every weight to the step cap after every step (decision 4)
+     productive and lower the likelihood of what was not (design principle 3),
+     clamping every weight to the step cap after every step (design principle 4)
   5. round to Q16 and run the four M0 gates: step cap, behavior shift on the
      golden set, golden score not lower, task score higher
   6. save the candidate and write the ledger line; HEAD only moves when the

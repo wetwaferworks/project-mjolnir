@@ -1,4 +1,4 @@
-/* Mjolnir M0: partial-credit scoring (JD's decision 8). Integer math only, so
+/* Mjolnir M0: partial-credit scoring (design principle 8). Integer math only, so
  * every machine gives the same score for the same run.
  *
  * Mazes: credit per segment. Every pit or obstacle cleared before a failure

@@ -4,9 +4,9 @@
  * synthetic policy: 8 input features, 4 actions, fixed-point integer weights
  * (Q16: 65536 = 1.0). It exists to prove the dreaming rules before any real
  * weights are allowed near them:
- *   - reward-weighted small nudges (decisions 3 and 4)
+ *   - reward-weighted small nudges (design principles 3 and 4)
  *   - a hard cap on how far any weight may move in one dream
- *   - old memories mixed in with new ones (decision 5)
+ *   - old memories mixed in with new ones (design principle 5)
  *   - a maximum behavior shift on a golden set, and a no-forgetting floor
  * All math is integer and the sample order is fixed, so a dream gives the same
  * candidate bit for bit on every machine.
