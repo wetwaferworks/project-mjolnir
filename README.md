@@ -1,6 +1,12 @@
+<p align="center">
+  <img src="docs/art/readme/mjolnir-header-1600x400.png"
+       alt="Project MJOLNIR, Measured Journal Operational Learning Neural Intelligent Researcher"
+       width="1600">
+</p>
+
 # Project Mjolnir
 
-**Measured Journaled, Operational Language or Learning, Neural Intelligent Researcher.**
+**Measured Journal Operational Learning Neural Intelligent Researcher.** The name and backronym are by Jaydee Wetwork.
 *The researcher that dreams.*
 
 Mjolnir is the system that sits on top of [Bolt PCHIE](https://github.com/wetwaferworks/bolt-pch-ie) and improves a model's weights while it dreams. PCHIE is the seat: it runs whatever weights are plugged into it and checks every step they take. Mjolnir is the suit built around that seat. At night, or when there is something new worth learning, the model dreams about what it did. A changed copy of its weights is worked out inside the dream, scored, and then tested for real outside the dream. Only an edit that holds up outside the dream is allowed to land, and every dream is written into a hash chain, so the whole history of how the model changed can be replayed and checked by anyone.
