@@ -19,12 +19,13 @@ mj_status mj_path_join(char *out, size_t cap, const char *a, const char *b) {
     return MJ_OK;
 }
 
-static int make_tmp(char *tmp, size_t cap, const char *path) {
-    size_t l = strlen(path);
-    if (l + 5 > cap) return 0;
-    memcpy(tmp, path, l);
-    memcpy(tmp + l, ".tmp", 5);
-    return 1;
+/* A temporary name next to path that no other writer uses: the process id
+ * and a per-process counter, so two writers of the same file never share
+ * (or delete) each other's temporary. */
+#include <stdio.h>
+static int make_tmp_n(char *tmp, size_t cap, const char *path, unsigned long pid, unsigned long long n) {
+    int w = snprintf(tmp, cap, "%s.%lu.%llu.tmp", path, pid, n);
+    return w > 0 && (size_t)w < cap && (size_t)w < MJ_PATH_MAX;
 }
 
 #if defined(_WIN32)
@@ -32,6 +33,12 @@ static int make_tmp(char *tmp, size_t cap, const char *path) {
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+
+static volatile LONG64 tmp_counter;
+static int make_tmp(char *tmp, size_t cap, const char *path) {
+    return make_tmp_n(tmp, cap, path, (unsigned long)GetCurrentProcessId(),
+                      (unsigned long long)InterlockedIncrement64(&tmp_counter));
+}
 
 static int widen(const char *s, wchar_t *w, int cap) {
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, w, cap);
@@ -131,7 +138,7 @@ mj_status mj_fs_write_atomic(const char *path, const void *data, size_t n, int r
     WPATH(w, path);
     if (!make_tmp(tmp, sizeof tmp, path) || !widen(tmp, wt, (int)MJ_PATH_MAX)) return MJ_E_LIMIT;
     if (!replace && GetFileAttributesW(w) != INVALID_FILE_ATTRIBUTES) return MJ_E_EXISTS;
-    h = CreateFileW(wt, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    h = CreateFileW(wt, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return MJ_E_IO;
     st = write_handle(h, data, n);
     CloseHandle(h);
@@ -188,6 +195,12 @@ uint64_t mj_clock_ms(void) { return (uint64_t)GetTickCount64(); }
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
+
+static unsigned long long tmp_counter;
+static int make_tmp(char *tmp, size_t cap, const char *path) {
+    return make_tmp_n(tmp, cap, path, (unsigned long)getpid(),
+                      (unsigned long long)__atomic_add_fetch(&tmp_counter, 1, __ATOMIC_RELAXED));
+}
 
 mj_status mj_fs_mkdir(const char *path) {
     struct stat s;
@@ -276,7 +289,7 @@ mj_status mj_fs_write_atomic(const char *path, const void *data, size_t n, int r
     mj_status st;
     if (!make_tmp(tmp, sizeof tmp, path)) return MJ_E_LIMIT;
     if (!replace && mj_fs_exists(path)) return MJ_E_EXISTS;
-    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0) return MJ_E_IO;
     st = write_fd(fd, data, n);
     close(fd);

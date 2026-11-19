@@ -24,8 +24,8 @@ mj_status mj_fs_free_bytes(const char *path, uint64_t *out);
  * to the budget; release it with mj_bfree(b, *out, *len ? *len : 1). */
 mj_status mj_fs_read_all(const char *path, size_t max, mj_budget *b, uint8_t **out, size_t *len);
 
-/* Atomic write: write <path>.tmp, flush it to the disk, then rename it into
- * place and flush the directory. With replace == 0 an existing target is
+/* Atomic write: write <path>.<pid>.<n>.tmp (a name no other writer uses),
+ * flush it to the disk, then rename it into place and flush the directory. With replace == 0 an existing target is
  * refused with MJ_E_EXISTS and nothing changes. */
 mj_status mj_fs_write_atomic(const char *path, const void *data, size_t n, int replace);
 
