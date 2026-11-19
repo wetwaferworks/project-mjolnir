@@ -6,6 +6,12 @@
  *       then stage 2, the hemisphere swap, starting from the classroom's
  *       left and right. The final model is the last one kept.
  *   mj_hemi classroom --data DIR [--classroom-rounds N] ...   stage 1 only
+ *   mj_hemi gate --data DIR --kind actor|watcher|swap --round N --set FILE [--set FILE]
+ *                --before BP --after BP [--other BP] [--judge-before BP --judge-after BP]
+ *                --parent SHA --candidate SHA [--note TEXT]
+ *       The keep-or-roll-back decision for a run on a real model (PCHIE's
+ *       pchie_hemispheres asks it): checks the sets' seals, decides, journals.
+ *       Exit 0 keep, 3 roll back.
  *   mj_hemi swap --data DIR [--rounds N] [--scenario complement|ternary]
  *               [--seed S] [--train-mazes N] [--holdout-mazes N] [--segments N]
  *               [--patience N] [--gpu] [--no-watcher] [--no-merge]
@@ -38,6 +44,9 @@ static int usage(void) {
             "                   [--scenario complement|ternary] [--seed S]\n"
             "                   [--train-mazes N] [--holdout-mazes N] [--segments N] [--patience N] [--gpu]\n"
             "                   [--no-watcher] [--no-merge]\n"
+            "       mj_hemi gate --data DIR --kind actor|watcher|swap --round N --set FILE [--set FILE]\n"
+            "                --before BP --after BP [--other BP] [--judge-before BP --judge-after BP]\n"
+            "                --parent SHA --candidate SHA [--note TEXT]\n"
             "       mj_hemi show FILE\n"
             "       mj_hemi replay FILE [--limit N]\n"
             "       mj_hemi bench [--states N]\n");
@@ -309,11 +318,137 @@ static int cmd_bench(int argc, char **argv) {
     return diff ? 1 : 0;
 }
 
+/* The keep-or-roll-back decision for a hemisphere run outside Mjolnir (a real
+ * model behind PCHIE). The caller measured the scores on holdout worlds and
+ * wrote the sample sets; Mjolnir checks the sets' seals, makes the decision
+ * and journals it. Exit 0 keep, 3 roll back, 1 or 2 refused. */
+static int parse_bp(const char *s, uint64_t *out) {
+    uint64_t v;
+    if (!parse_u64(s, &v) || v > 10000u) return 0;
+    *out = v;
+    return 1;
+}
+static int hex64_ok(const char *s) {
+    size_t i;
+    if (strlen(s) != 2 * MJ_SHA256_LEN) return 0;
+    for (i = 0; s[i]; ++i)
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0;
+    return 1;
+}
+static int cmd_gate(int argc, char **argv) {
+    const char *data = NULL, *kind = NULL, *sets[2] = {NULL, NULL}, *parent = NULL, *candidate = NULL, *note = "-";
+    uint64_t round = 0, before = 0, after = 0, other = 0, jb = 0, ja = 0;
+    int have_before = 0, have_after = 0, have_other = 0, have_jb = 0, have_ja = 0, n_sets = 0, i, keep;
+    char ledger[MJ_PATH_MAX];
+    mj_budget b;
+    mj_dream_record rec;
+    mj_ledger_state ls;
+    uint64_t bad;
+    char inputs[MJ_TEXT_MAX + 1] = "";
+    char tallies[MJ_TEXT_MAX + 1] = "";
+    char when[21];
+    for (i = 2; i < argc; ++i) {
+        const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
+        if (v == NULL) return usage();
+        if (strcmp(a, "--data") == 0) data = v;
+        else if (strcmp(a, "--kind") == 0) kind = v;
+        else if (strcmp(a, "--set") == 0 && n_sets < 2) sets[n_sets++] = v;
+        else if (strcmp(a, "--parent") == 0) parent = v;
+        else if (strcmp(a, "--candidate") == 0) candidate = v;
+        else if (strcmp(a, "--note") == 0) note = v;
+        else if (strcmp(a, "--round") == 0) { if (!parse_u64(v, &round) || round > 999) return usage(); }
+        else if (strcmp(a, "--before") == 0) { if (!parse_bp(v, &before)) return usage(); have_before = 1; }
+        else if (strcmp(a, "--after") == 0) { if (!parse_bp(v, &after)) return usage(); have_after = 1; }
+        else if (strcmp(a, "--other") == 0) { if (!parse_bp(v, &other)) return usage(); have_other = 1; }
+        else if (strcmp(a, "--judge-before") == 0) { if (!parse_bp(v, &jb)) return usage(); have_jb = 1; }
+        else if (strcmp(a, "--judge-after") == 0) { if (!parse_bp(v, &ja)) return usage(); have_ja = 1; }
+        else return usage();
+        ++i;
+    }
+    if (data == NULL || kind == NULL || n_sets == 0 || parent == NULL || candidate == NULL || !have_before ||
+        !have_after || round == 0)
+        return usage();
+    if (!hex64_ok(parent) || !hex64_ok(candidate)) {
+        fprintf(stderr, "mj_hemi: --parent and --candidate must be 64 lowercase hex digits\n");
+        return 2;
+    }
+    if (strcmp(kind, "actor") == 0) keep = after > before;
+    else if (strcmp(kind, "watcher") == 0) {
+        if (!have_jb || !have_ja) return usage();
+        keep = ja > jb && after >= before;
+    } else if (strcmp(kind, "swap") == 0) {
+        if (!have_other) return usage();
+        keep = after > before && after > other;
+    } else return usage();
+    if (strlen(note) > 160) {
+        fprintf(stderr, "mj_hemi: --note is longer than 160 characters\n");
+        return 2;
+    }
+    mj_budget_init(&b, (size_t)1 << 31);
+    for (i = 0; i < n_sets; ++i) {
+        mj_hemi_set s;
+        mj_hemi_tally t;
+        uint8_t sha[MJ_SHA256_LEN];
+        char h[2 * MJ_SHA256_LEN + 1];
+        size_t n = strlen(inputs), m = strlen(tallies);
+        mj_status st = mj_hemi_load(sets[i], &b, &s, sha);
+        if (st != MJ_OK) {
+            fprintf(stderr, "mj_hemi: %s: %s\n", sets[i], mj_status_name(st));
+            return 1;
+        }
+        mj_hemi_tally_set(&s, &t);
+        hex(sha, MJ_SHA256_LEN, h);
+        h[12] = 0;
+        snprintf(inputs + n, sizeof inputs - n, "%sset-%s", i ? "," : "", h);
+        snprintf(tallies + m, sizeof tallies - m, "%spass %u: %u steps, %u cleared, judged right %u of %u",
+                 i ? "; " : "", (unsigned)s.h.pass, (unsigned)t.steps, (unsigned)t.cleared,
+                 (unsigned)(t.agree_right + t.object_right),
+                 (unsigned)(t.agree_right + t.agree_wrong + t.object_right + t.object_wrong));
+        mj_hemi_set_free(&s);
+    }
+    if (mj_path_join(ledger, sizeof ledger, data, "hemispheres.mjl") != MJ_OK) return 2;
+    mj_ledger_record_init(&rec);
+    snprintf(rec.dream_id, sizeof rec.dream_id, "real-%s-%03u", kind, (unsigned)round);
+    if (mj_utc_now(when) == MJ_OK) memcpy(rec.when, when, sizeof when);
+    snprintf(rec.trigger, sizeof rec.trigger, "%s", strcmp(kind, "swap") == 0 ? "hemispheres" : "classroom");
+    memcpy(rec.grader, "answer-key", 11);
+    snprintf(rec.inputs, sizeof rec.inputs, "%s", inputs);
+    snprintf(rec.weights_before, sizeof rec.weights_before, "%.12s", parent);
+    snprintf(rec.weights_candidate, sizeof rec.weights_candidate, "%.12s", candidate);
+    snprintf(rec.edit, sizeof rec.edit, "%s", tallies);
+    rec.score_before_bp = before;
+    rec.score_after_bp = after;
+    if (strcmp(kind, "watcher") == 0)
+        snprintf(rec.gates, sizeof rec.gates, "judge=%s,play=%s", ja > jb ? "pass" : "fail",
+                 after >= before ? "pass" : "fail");
+    else if (strcmp(kind, "swap") == 0)
+        snprintf(rec.gates, sizeof rec.gates, "beats-first=%s,beats-second=%s", after > before ? "pass" : "fail",
+                 after > other ? "pass" : "fail");
+    else snprintf(rec.gates, sizeof rec.gates, "holdout=%s", keep ? "pass" : "fail");
+    memcpy(rec.outcome, keep ? "dry-run-pass" : "rolled-back", keep ? 13 : 12);
+    if (strcmp(kind, "watcher") == 0)
+        snprintf(rec.notes, sizeof rec.notes, "judgments %u->%u bp; own play %u->%u bp; %s", (unsigned)jb,
+                 (unsigned)ja, (unsigned)before, (unsigned)after, note);
+    else if (strcmp(kind, "swap") == 0)
+        snprintf(rec.notes, sizeof rec.notes, "parents %u and %u bp, child %u bp; %s", (unsigned)before,
+                 (unsigned)other, (unsigned)after, note);
+    else snprintf(rec.notes, sizeof rec.notes, "%u->%u bp; %s", (unsigned)before, (unsigned)after, note);
+    if (mj_fs_mkdir(data) != MJ_OK || mj_ledger_append(ledger, &b, &rec) != MJ_OK ||
+        mj_ledger_verify_file(ledger, &b, &ls, &bad) != MJ_OK) {
+        fprintf(stderr, "mj_hemi: could not journal the decision in %s\n", ledger);
+        return 1;
+    }
+    printf("%s: %s (journal %s, %llu records)\n", rec.dream_id, keep ? "keep" : "roll back", ledger,
+           (unsigned long long)ls.count);
+    return keep ? 0 : 3;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) return usage();
     if (strcmp(argv[1], "pipeline") == 0) return cmd_run(argc, argv, 1, 1);
     if (strcmp(argv[1], "classroom") == 0) return cmd_run(argc, argv, 1, 0);
     if (strcmp(argv[1], "swap") == 0) return cmd_run(argc, argv, 0, 1);
+    if (strcmp(argv[1], "gate") == 0) return cmd_gate(argc, argv);
     if (strcmp(argv[1], "show") == 0) return cmd_show(argc, argv);
     if (strcmp(argv[1], "replay") == 0) return cmd_replay(argc, argv);
     if (strcmp(argv[1], "bench") == 0) return cmd_bench(argc, argv);

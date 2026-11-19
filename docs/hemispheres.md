@@ -191,6 +191,19 @@ What this shows, honestly:
 
 The hemisphere interface is the seam for real models. A real hemisphere only has to give a distribution over the legal moves of a PCHIE world state. For a text model, that is the next-token probabilities of the move names, renormalised over the legal moves. The left and right can be the same network at two precisions (for example a ternary copy and the full-precision original), which is how Little Super Nemo (from Nemotron 3.5 Super VL, a Mamba-2, mixture-of-experts and attention hybrid) is meant to take part. Weight edits for real models go through Mjolnir's working copy, never the original. See [C-PORT.md](C-PORT.md) for the real-weight path.
 
+For a real model, the world outside Mjolnir plays the rounds and asks `mj_hemi gate` for every decision. The gate reads the round's sample sets (refusing any whose seal or bounds fail), applies the same rules as the toy stages (actor: better on holdout; watcher: more judgments confirmed by the answer key and no worse own play; swap: the child beats both parents), and appends a `real-<kind>-NNN` record to `hemispheres.mjl`. It exits 0 to keep and 3 to roll back.
+
+The first real run used Bolt E4B through PCHIE, with the ternary tail of layers 38 to 41 as the left and the Q4 tail as the right, and the line between them as the only edit. Results on 117 holdout states (basis points cleared by the answer key):
+
+| Stage | What happened | Mjolnir |
+|---|---|---|
+| Classroom 1 | Actor t=0 to t=3/8, 9230 to 9914. Watcher t=8/8 to t=5/8, judgments 9230 to 9914 | keep, keep |
+| Classroom 2 | No disagreements left; no candidate improved | roll back, roll back |
+| Swap 1 | Child t=4/8 at 9914 ties both parents | roll back |
+| New model | t=3/8, 9914 bp, tail SHA-256 646e25c4... (provisional) | 5 records, chain verified |
+
+The details, the probe and what is still missing are on PCHIE's `docs/hemispheres.md`.
+
 ## Background and credits
 
 - The idea, the two-stage pipeline and the names: **Jaydee Wetwork**, Wet Wafer Works.
