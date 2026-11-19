@@ -166,6 +166,9 @@ def _proc_start():
         c, e, k, u = FT(), FT(), FT(), FT()
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.GetCurrentProcess.argtypes = []
+        k32.GetProcessTimes.restype = wintypes.BOOL
+        k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FT)] * 4
         if not k32.GetProcessTimes(k32.GetCurrentProcess(), ctypes.byref(c), ctypes.byref(e), ctypes.byref(k), ctypes.byref(u)):
             return 0
         return (c.hi << 32) | c.lo
@@ -188,9 +191,13 @@ def _proc_start():
 def _host_name():
     if sys.platform == "win32":
         import ctypes
+        from ctypes import wintypes
         buf = ctypes.create_unicode_buffer(256)
-        n = ctypes.c_uint32(256)
-        name = buf.value if ctypes.windll.kernel32.GetComputerNameW(buf, ctypes.byref(n)) else ""
+        n = wintypes.DWORD(256)
+        gcn = ctypes.WinDLL("kernel32").GetComputerNameW
+        gcn.argtypes = [wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        gcn.restype = wintypes.BOOL
+        name = buf.value if gcn(buf, ctypes.byref(n)) else ""
     else:
         import socket
         try:
