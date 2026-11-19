@@ -1,6 +1,6 @@
 # python/tests/
 
-unittest tests for the M1 package, run by ctest as `py_ledger`, `py_store`, `py_replay`, `py_labeler`, `py_toytrain`, `py_real`, `py_c_port` and `py_c_port_m1` (44 tests in all).
+unittest tests for the M1 package, run by ctest as `py_ledger`, `py_store`, `py_replay`, `py_labeler`, `py_toytrain`, `py_real`, `py_c_port` and `py_c_port_m1` (45 tests in all).
 
 ```
 cd python

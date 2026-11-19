@@ -97,7 +97,7 @@ typedef struct target {
     size_t seed_len;
 } target;
 
-#define N_TARGETS 7
+#define N_TARGETS 8
 static target T[N_TARGETS];
 
 static void seeds(void) {
@@ -115,6 +115,14 @@ static void seeds(void) {
     T[4].name = "safet"; T[4].fn = mj_fuzz_safet;
     T[5].name = "delta"; T[5].fn = mj_fuzz_delta;
     T[6].name = "json"; T[6].fn = mj_fuzz_json;
+    T[7].name = "http"; T[7].fn = mj_fuzz_http;
+    {
+        static const char req[] =
+            "POST /api/grade HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nX-Mjolnir: 1\r\nContent-Type: application/json\r\n"
+            "Content-Length: 44\r\n\r\n{\"replay\":\"r\",\"index\":2,\"label\":\"good\"}";
+        memcpy(T[7].seed, req, sizeof req - 1);
+        T[7].seed_len = sizeof req - 1;
+    }
     {
         static const char line[] =
             "{\"format\":\"pchie.research.v1\",\"event\":\"advise\",\"decision\":1,\"x\":-0.0,\"key\":true,"

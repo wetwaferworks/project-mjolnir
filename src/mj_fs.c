@@ -74,10 +74,16 @@ mj_status mj_fs_size(const char *path, uint64_t *out) {
     return MJ_OK;
 }
 
+/* a missing file or a missing folder on the way to it, as ENOENT on POSIX */
+static int win_absent(void) {
+    DWORD e = GetLastError();
+    return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND;
+}
+
 mj_status mj_fs_remove(const char *path) {
     WPATH(w, path);
     if (DeleteFileW(w)) return MJ_OK;
-    return (GetLastError() == ERROR_FILE_NOT_FOUND) ? MJ_OK : MJ_E_IO;
+    return win_absent() ? MJ_OK : MJ_E_IO;
 }
 
 mj_status mj_fs_free_bytes(const char *path, uint64_t *out) {
@@ -97,7 +103,7 @@ mj_status mj_fs_read_all(const char *path, size_t max, mj_budget *b, uint8_t **o
     *out = NULL;
     *len = 0;
     h = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return (GetLastError() == ERROR_FILE_NOT_FOUND) ? MJ_E_NOTFOUND : MJ_E_IO;
+    if (h == INVALID_HANDLE_VALUE) return win_absent() ? MJ_E_NOTFOUND : MJ_E_IO;
     if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0) { CloseHandle(h); return MJ_E_IO; }
     if ((uint64_t)sz.QuadPart > (uint64_t)max) { CloseHandle(h); return MJ_E_LIMIT; }
     buf = (uint8_t *)mj_balloc(b, sz.QuadPart ? (size_t)sz.QuadPart : 1u);
@@ -171,7 +177,7 @@ mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void
     mj_status st = MJ_OK;
     if (mj_path_join(pat, sizeof pat, dir, "*") != MJ_OK || !widen(pat, wp, (int)MJ_PATH_MAX)) return MJ_E_LIMIT;
     h = FindFirstFileW(wp, &fd);
-    if (h == INVALID_HANDLE_VALUE) return (GetLastError() == ERROR_FILE_NOT_FOUND) ? MJ_OK : MJ_E_IO;
+    if (h == INVALID_HANDLE_VALUE) return win_absent() ? MJ_OK : MJ_E_IO;
     do {
         char name[MJ_PATH_MAX];
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
@@ -192,7 +198,7 @@ mj_status mj_fs_list_typed(const char *dir, size_t max_entries, mj_fs_list_typed
     mj_status st = MJ_OK;
     if (mj_path_join(pat, sizeof pat, dir, "*") != MJ_OK || !widen(pat, wp, (int)MJ_PATH_MAX)) return MJ_E_LIMIT;
     h = FindFirstFileW(wp, &fd);
-    if (h == INVALID_HANDLE_VALUE) return (GetLastError() == ERROR_FILE_NOT_FOUND) ? MJ_OK : MJ_E_IO;
+    if (h == INVALID_HANDLE_VALUE) return win_absent() ? MJ_OK : MJ_E_IO;
     do {
         char name[MJ_PATH_MAX];
         int is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;

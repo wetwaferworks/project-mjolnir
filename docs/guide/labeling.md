@@ -5,6 +5,12 @@ cd python
 python -m mjolnir label --runs RUN_FOLDER [RUN_FOLDER ...] --data DATA_FOLDER [--port 8765] [--grader JD] [--no-browser]
 ```
 
+or, with the C tools built, the same page from C:
+
+```
+mj_m1 label --runs RUN_FOLDER [RUN_FOLDER ...] --data DATA_FOLDER [--port 8765] [--grader JD] [--no-browser]
+```
+
 It serves a page on this machine only, at `http://127.0.0.1:8765/`, and steps through recorded runs one step at a time, least certain steps first. Keys and buttons:
 
 | Key | Button | Meaning |

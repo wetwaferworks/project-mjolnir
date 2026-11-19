@@ -4,6 +4,7 @@
 #include "mjolnir/mj_fs.h"
 #include "mjolnir/mj_hash.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -446,6 +447,56 @@ uint32_t mj_replay_score_bp(const mj_replay_run *run) {
     for (i = 0; i < run->n_steps; ++i)
         if (run->steps[i].autolab != MJ_AUTO_NOT_YET) ++good;
     return (uint32_t)((uint64_t)good * 10000u / run->n_steps);
+}
+
+int mj_replay_open_bits(const mj_json *d, uint32_t v, unsigned *bits) {
+    const mj_jnode *x;
+    if (!mj_json_truthy(d, v)) { *bits = 0; return 1; } /* int(open or 0) */
+    x = &d->v[v];
+    switch (x->kind) {
+    case MJ_J_TRUE: *bits = 1; return 1;
+    case MJ_J_INT: *bits = (unsigned)((uint64_t)x->i & 15u); return 1;
+    case MJ_J_FLOAT: {
+        double t;
+        if (!isfinite(x->f)) return 0;
+        t = trunc(x->f);
+        /* past 2^63 a double is a multiple of 2^11, so its low bits are 0 */
+        *bits = fabs(t) < 9223372036854775808.0 ? (unsigned)((uint64_t)(int64_t)t & 15u) : 0u;
+        return 1;
+    }
+    case MJ_J_BIGINT: {
+        const char *s = d->t + x->s_off;
+        uint32_t i = 0, m = 0;
+        int neg = s[0] == '-';
+        for (i = neg ? 1u : 0u; i < x->s_len; ++i) m = (m * 10u + (uint32_t)(s[i] - '0')) & 15u;
+        *bits = neg ? ((16u - m) & 15u) : m;
+        return 1;
+    }
+    case MJ_J_STR: { /* int("5"): optional spaces, sign, digits with single underscores */
+        const char *s = d->t + x->s_off;
+        size_t a = 0, e = x->s_len;
+        int neg = 0, any = 0, us = 0;
+        uint32_t m = 0;
+        while (a < e && (s[a] == ' ' || (s[a] >= '\t' && s[a] <= '\r'))) ++a;
+        while (e > a && (s[e - 1] == ' ' || (s[e - 1] >= '\t' && s[e - 1] <= '\r'))) --e;
+        if (a < e && (s[a] == '+' || s[a] == '-')) neg = s[a++] == '-';
+        for (; a < e; ++a) {
+            if (s[a] == '_') {
+                if (!any || us) return 0;
+                us = 1;
+                continue;
+            }
+            if (s[a] < '0' || s[a] > '9') return 0;
+            m = (m * 10u + (uint32_t)(s[a] - '0')) & 15u;
+            any = 1;
+            us = 0;
+        }
+        if (!any || us) return 0;
+        *bits = neg ? ((16u - m) & 15u) : m;
+        return 1;
+    }
+    default: return 0;
+    }
 }
 
 /* ---- the folder scan ---- */

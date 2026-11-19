@@ -8,6 +8,7 @@
 - Atomic writes in C use a temporary name of their own (`<path>.<pid>.<n>.tmp`, created exclusively), so two writers never share or delete each other's temporary file.
 - Fuzz targets for the safetensors header and MJDELTA1 parsers.
 - Replays, grades and the toy nap in C (`mj_replay`, `mj_grades`, `mj_toytrain`, the `mj_m1` tool), with a small JSON reader that follows Python's rules. The same run folders give byte-identical replay dumps; grades and toy-nap ledgers are shared both ways. Parity tests in `py_c_port_m1`; a JSON fuzz target.
+- The labeling page in C (`mj_labeler`, `mj_m1 label`): the same page, order of steps, answers and grades ledger as the Python tool, on 127.0.0.1 only. Stalled connections are dropped after 5 seconds and the port is bound exclusively on Windows. Side-by-side parity test against the Python session; an HTTP fuzz target.
 - The low-rank edit in C (`mj_lowrank`, `mj_real lowrank`): whitening by the background keys, QR, SVD and truncation in double, with cuBLAS for the big products when built with CUDA. Matches Python's `low_rank` to a few parts in a million.
 
 - Documentation: a guide under `docs/guide/` (overview, architecture, getting started on Windows and Linux, build and test, decisions, safety and rollback, labeling, real-weight edits, glossary), a roadmap, a README in every source folder, and `AGENTS.md`, `CREDITS.md`, `CONTRIBUTING.md`, `SECURITY.md` and `PROVENANCE.md`.

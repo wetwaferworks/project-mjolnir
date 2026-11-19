@@ -14,6 +14,7 @@ C unit tests for the M0 library, run by ctest. `mj_test.h` is the small shared t
 | `test_delta.c` | MJDELTA1 pack and unpack, every refusal, and Python's float repr for the scale. |
 | `test_lowrank.c` | The low-rank edit against textbook formulas on small sizes (explicit inverse, dense product), truncation error, refusals, CPU against GPU. |
 | `test_replay.c` | The JSON reader (Python's refusals, `==` and dump format), replays from run logs and their refusals, the folder scan, safe ids, the grades ledger. |
+| `test_labeler.c` | The labeling page without a socket: step order, grade, skip and back, and the HTTP answers and refusals. |
 | `test_toytrain.c` | The toy nap from replays: features, deterministic training, gates, dry run and integrate, refusals. |
 | `mj_runlog.h` | Writes a chained PCHIE run log for the tests, the same shape as `python/tests/util.py`. |
 | `test_workcopy.c` | Register, apply, roll back, the dirty marker, the refusals, unique temporary names, and CPU/GPU agreement on the apply. |

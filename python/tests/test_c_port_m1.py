@@ -9,6 +9,11 @@ hidden folders, copies, broken chains).
 
 Grades: each side writes grades the other reads, with the same fields.
 
+Labeling page: the C server (`mj_m1 label`) and a Python Session walk the same
+runs side by side: the page bytes, every step's view, and the answers to
+grade, skip and back must be equal as JSON, and the host and marker checks
+must refuse the same requests.
+
 Toy nap: the C nap draws its minibatches from splitmix64 instead of PyTorch's
 generator, so the candidates are not the same. Instead the test (1) replays
 a short C training (40 steps) in PyTorch with the very same minibatch indices
@@ -84,6 +89,40 @@ def edge_log(path):
     L.write(path, sep="\r\n\n  \n")
 
 
+def put(path, data):
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def label_edge_log(path):
+    """Awkward but valid values the labeling page shows. Positions stay whole
+    numbers: Python's _map fails on any other position, where C leaves it off
+    the map."""
+    L = RawLog()
+    L.rec(event="start")
+    steps = [
+        dict(x=True, y=2, key=[0], open="5", action=1.0, token=True, props=[[True, 300001], [3, 300000], [4, 1234567]]),
+        dict(x=1, y=2, key=[], open=2.7, action="x", token=3, props=[[3, 1048576], [9, 524288.5]]),
+        dict(x=1, y=False, key=None, open=None, action=None, token=None, props=[]),
+        dict(x=2, y=-3, key=1, open=-1, action=5, token=4, props=[[True, 7], [1, 8]]),
+        dict(x=2, y=-2, key=0, open=15, action=2, token=12345678901234567890, props=[[12345678901234567890, 1]]),
+    ]
+    for i, st in enumerate(steps):
+        L.rec(event="advise", decision=i, x=st["x"], y=st["y"], key=st["key"], open=st["open"], proposals=st["props"])
+        L.rec(event="decided", decision=i, token=st["token"])
+        L.rec(event="transition", state=i, action=st["action"], next=i + 1 if i != 3 else 0, reward_q20=i * 1000)
+    L.write(path)
+
+
+def free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
 @unittest.skipUnless(tool("mj_m1"), "needs the C tools")
 class M1Parity(unittest.TestCase):
     def setUp(self):
@@ -104,12 +143,13 @@ class M1Parity(unittest.TestCase):
         edge_log(os.path.join(sub, "\u00fcn\u00efcode run.jsonl"))
         shutil.copy(os.path.join(rd, "r1.jsonl"), os.path.join(sub, "copy-of-r1.jsonl"))
         shutil.copy(os.path.join(rd, "r1.jsonl"), os.path.join(rd, ".hidden", "h.jsonl"))
-        data = open(os.path.join(rd, "r2.jsonl"), "rb").read()
-        open(os.path.join(rd, "broken.jsonl"), "wb").write(data.replace(b'"task":5', b'"task":7', 1))
-        open(os.path.join(rd, "nostart.jsonl"), "wb").write(b"\n".join(data.split(b"\n")[1:]))
-        open(os.path.join(rd, "other.jsonl"), "wb").write(b'{"format":"something.else"}\n')
-        open(os.path.join(rd, "empty.jsonl"), "wb").write(b"")
-        open(os.path.join(rd, "long.jsonl"), "wb").write(b" " * 5000 + b'{"format":"pchie.research.v1"}\n')
+        with open(os.path.join(rd, "r2.jsonl"), "rb") as f:
+            data = f.read()
+        put(os.path.join(rd, "broken.jsonl"), data.replace(b'"task":5', b'"task":7', 1))
+        put(os.path.join(rd, "nostart.jsonl"), b"\n".join(data.split(b"\n")[1:]))
+        put(os.path.join(rd, "other.jsonl"), b'{"format":"something.else"}\n')
+        put(os.path.join(rd, "empty.jsonl"), b"")
+        put(os.path.join(rd, "long.jsonl"), b" " * 5000 + b'{"format":"pchie.research.v1"}\n')
         return rd
 
     def test_replays_identical(self):
@@ -156,6 +196,77 @@ class M1Parity(unittest.TestCase):
         code, out, err = self.c("grades", "--data", self.d)
         c_latest = {(a, int(i)): (lab, g) for a, i, lab, g in (l.split(" ") for l in out.splitlines())}
         self.assertEqual(c_latest, latest)
+
+    def test_labeler_side_by_side(self):
+        import http.client
+        import time
+        from mjolnir.labeler import PAGE, Session
+        rd = os.path.join(self.d, "runs")
+        os.makedirs(rd)
+        for i in range(2):
+            write_run(os.path.join(rd, "r%d.jsonl" % i), MOVES, start_xy=(i, 0))
+        label_edge_log(os.path.join(rd, "edge.jsonl"))
+        runs = replay.load_all([rd])
+        py = Session(runs, os.path.join(self.d, "py-grades.mjl"))
+        port = free_port()
+        cdata = os.path.join(self.d, "cdata")
+        proc = subprocess.Popen([self.m1, "label", "--runs", rd, "--data", cdata, "--port", str(port), "--no-browser"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            def req(method, path, body=None, headers=None):
+                h = {"X-Mjolnir": "1"} if headers is None else headers
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                c.request(method, path, body=json.dumps(body) if body is not None else None, headers=h)
+                r = c.getresponse()
+                data = r.read()
+                c.close()
+                return r.status, data
+            for _ in range(100):
+                try:
+                    st, page = req("GET", "/", headers={})
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            self.assertEqual(st, 200)
+            self.assertEqual(page, PAGE.encode("utf-8"))
+            self.assertEqual(req("GET", "/api/next", headers={})[0], 403)
+            self.assertEqual(req("GET", "/", headers={"Host": "evil.example:%d" % port})[0], 403)
+            self.assertEqual(req("GET", "/api/next", headers={"Host": "localhost:%d" % port, "X-Mjolnir": "1"})[0], 200)
+            self.assertEqual(req("POST", "/api/grade", {"replay": "nope", "index": 0, "label": "good"})[0], 400)
+
+            def same(code_body, pyview):
+                code, data = code_body
+                self.assertEqual(code, 200, data)
+                self.assertEqual(json.loads(data), json.loads(json.dumps(pyview)))
+                return json.loads(data)
+
+            v = same(req("GET", "/api/next"), py.view(py.next_step()))
+            views = 1
+            while not v["finished"] and views < 200:
+                key = (v["replay"], v["index"])
+                if views % 5 == 3:
+                    py.skip(*key)
+                    v = same(req("POST", "/api/skip", {"replay": key[0], "index": key[1]}), py.view(py.next_step()))
+                elif views % 7 == 4:
+                    k = py.back()
+                    v = same(req("POST", "/api/back", {}), py.view(k if k else py.next_step()))
+                else:
+                    label = ("good", "bad", "productive")[views % 3]
+                    py.grade(key[0], key[1], label)
+                    v = same(req("POST", "/api/grade", {"replay": key[0], "index": key[1], "label": label}),
+                             py.view(py.next_step()))
+                views += 1
+            self.assertTrue(v["finished"])
+            print("\n  labeling page: %d views side by side, all equal; %d steps, %d graded"
+                  % (views, v["stats"]["total"], v["stats"]["graded"]))
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+            proc.stdout.close()
+            proc.stderr.close()
+        c_latest = grades.latest(os.path.join(cdata, "grades.mjl"))
+        p_latest = grades.latest(os.path.join(self.d, "py-grades.mjl"))
+        self.assertEqual(c_latest, p_latest)
 
     @unittest.skipUnless(has_torch(), "needs torch")
     def test_toy_nap(self):

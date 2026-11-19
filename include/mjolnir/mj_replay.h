@@ -96,6 +96,11 @@ void mj_replay_set_free(mj_replay_set *s);
  * '.' and '-' go, empty becomes "x", then at most limit characters. */
 void mj_safe_id(const char *s, size_t limit, char *out, size_t cap);
 
+/* The low four bits of Python's int(open or 0) for a step's "open" value
+ * (the four open directions). 0 when Python would fail: a non-empty list or
+ * object, text that is not a whole number, or an infinite float. */
+int mj_replay_open_bits(const mj_json *d, uint32_t v, unsigned *bits);
+
 /* The runs as Python's json.dumps(runs, sort_keys=True, separators=(",", ":")). */
 void mj_replay_dump(mj_jout *o, const mj_replay_run *runs, uint32_t n);
 

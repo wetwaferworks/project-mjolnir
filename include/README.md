@@ -24,6 +24,7 @@ Public C headers for the M0 library, under `include/mjolnir/`. Each header has a
 | `mj_json.h` | A small JSON reader that answers like Python's `json` and `==` (used for PCHIE run logs). |
 | `mj_replay.h` | Replays from PCHIE run logs: chain check, steps, automatic labels, folder scan. |
 | `mj_grades.h` | Grades in their own hash-chained ledger; the latest grade per step. |
+| `mj_labeler.h` | The labeling page: the grading session, HTTP answers, and the local server. |
 | `mj_toytrain.h` | The toy nap from replays: features, training, gates, store and ledger. |
 | `mj_par.h` | Splitting a loop across threads and joining them, with no locks. |
 

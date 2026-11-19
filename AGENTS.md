@@ -18,7 +18,7 @@ This file is for coding assistants and other automated contributors working in t
 ```
 cmake -S . -B build
 cmake --build build --config Release
-ctest --test-dir build -C Release          # expect 27/27 passing
+ctest --test-dir build -C Release          # expect 28/28 passing
 cd python && python -m mjolnir --help
 ```
 

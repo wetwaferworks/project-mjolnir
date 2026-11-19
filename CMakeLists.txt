@@ -50,7 +50,10 @@ set(MJ_SOURCES
   src/mj_json.c
   src/mj_replay.c
   src/mj_grades.c
-  src/mj_toytrain.c)
+  src/mj_toytrain.c
+  src/mj_labeler.c
+  src/mj_labeler_page.c
+  src/mj_labeler_net.c)
 
 # The GPU path for applying edits to real weights. Off by default; the CPU
 # path gives the same bytes.
@@ -76,6 +79,10 @@ if(NOT MSVC)
   find_package(Threads REQUIRED)
   target_link_libraries(mjolnir PUBLIC Threads::Threads m)
 endif()
+if(WIN32)
+  # sockets and the default browser, for the labeling page
+  target_link_libraries(mjolnir PUBLIC ws2_32 shell32)
+endif()
 if(MJ_CUDA)
   set_source_files_properties(src/mj_apply_cuda.cu src/mj_lowrank_cuda.cu PROPERTIES LANGUAGE CUDA)
   target_compile_options(mjolnir PRIVATE
@@ -100,7 +107,7 @@ set(MJ_TEST_TMP ${CMAKE_BINARY_DIR}/test-tmp)
 file(MAKE_DIRECTORY ${MJ_TEST_TMP})
 set(MJ_TEST_ENV "MJ_TEST_TMP=${MJ_TEST_TMP}")
 
-foreach(t test_hash test_store test_ledger test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank test_replay test_toytrain)
+foreach(t test_hash test_store test_ledger test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank test_replay test_toytrain test_labeler)
   add_executable(${t} tests/${t}.c)
   target_link_libraries(${t} PRIVATE mjolnir)
   target_include_directories(${t} PRIVATE tests)
@@ -124,12 +131,15 @@ if(MJ_LIBFUZZER)
   if(NOT MSVC)
     target_link_libraries(mjolnir_fuzz PUBLIC Threads::Threads m)
   endif()
+  if(WIN32)
+    target_link_libraries(mjolnir_fuzz PUBLIC ws2_32 shell32)
+  endif()
   if(MSVC)
     target_compile_options(mjolnir_fuzz PRIVATE /fsanitize=fuzzer)
   else()
     target_compile_options(mjolnir_fuzz PRIVATE -fsanitize=fuzzer-no-link)
   endif()
-  foreach(ft ledger manifest toy score safet delta json)
+  foreach(ft ledger manifest toy score safet delta json http)
     add_executable(mj_libfuzz_${ft} tests/fuzz/mj_libfuzzer.c)
     target_link_libraries(mj_libfuzz_${ft} PRIVATE mjolnir_fuzz)
     target_include_directories(mj_libfuzz_${ft} PRIVATE tests/fuzz)

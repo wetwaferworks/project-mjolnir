@@ -11,7 +11,7 @@
 | `MJ_PYTHON_TESTS` | `ON` | Add the Python tests to ctest. |
 | `MJ_PYTHON` | (found) | The interpreter for the Python tests. Point it at one with `torch` and `numpy` to run the GPU and real-weight tests. |
 
-## The test bench (27 ctest cases)
+## The test bench (28 ctest cases)
 
 | Test | What it checks |
 |---|---|
@@ -25,12 +25,13 @@
 | `test_delta` | MJDELTA1 pack and unpack, each refusal, and the scale written as Python's `repr()` writes it. |
 | `test_lowrank` | The low-rank edit against textbook formulas on small sizes, the truncation error, refusals, and cuBLAS against the CPU. |
 | `test_replay` | The JSON reader against Python's `json` rules (refusals, `==`, the dump format), replays from run logs (labels, scores, every refusal, the folder scan), and the grades ledger. |
+| `test_labeler` | The labeling page without a socket: the order of steps, grade, skip and back, unknown labels, and the HTTP answers (host check, request marker, size limits, bad requests). |
 | `test_toytrain` | The toy nap: features, deterministic training, the four gates, dry run against integrate, refusals, ledger fields. |
 | `test_workcopy` | The real-weight path in C on a small synthetic model: register, apply, roll back byte for byte, the dirty marker, refusals, and the CPU and GPU apply giving the same bytes. |
-| `fuzz_builtin` | The built-in deterministic fuzzer over the ledger, manifest, toy, score, safetensors-header, delta and JSON parsers. |
+| `fuzz_builtin` | The built-in deterministic fuzzer over the ledger, manifest, toy, score, safetensors-header, delta and JSON parsers and the labeling page's HTTP requests. |
 | `tool_clean`, `tool_nap`, `tool_nightly`, `tool_ledger_verify` | The tools end to end on a scratch store. |
 | `tool_refuses_live`, `tool_refuses_no_dry_run` | The tools refuse `--live` and refuse to run without `--dry-run` (expected to fail, so they pass when refused). |
-| `py_ledger`, `py_store`, `py_replay`, `py_labeler`, `py_toytrain`, `py_real`, `py_c_port`, `py_c_port_m1` | The Python modules, 44 tests in all, including the C tools reading Python-written stores and ledgers, and `py_c_port`: the C port against Python (delta bytes, store, state and ledger records, the edited weights, the low-rank edit), and `py_c_port_m1`: replays, grades and the toy nap against Python. `py_toytrain` and `py_real` need `torch` and `numpy` and are skipped without them. The real-weight tests use small synthetic models, never a real download. |
+| `py_ledger`, `py_store`, `py_replay`, `py_labeler`, `py_toytrain`, `py_real`, `py_c_port`, `py_c_port_m1` | The Python modules, 45 tests in all, including the C tools reading Python-written stores and ledgers, and `py_c_port`: the C port against Python (delta bytes, store, state and ledger records, the edited weights, the low-rank edit), and `py_c_port_m1`: replays, grades, the labeling page and the toy nap against Python. `py_toytrain` and `py_real` need `torch` and `numpy` and are skipped without them. The real-weight tests use small synthetic models, never a real download. |
 
 Test scratch files go in `build/test-tmp/` (set by `MJ_TEST_TMP`).
 

@@ -41,57 +41,6 @@ static mj_status push(mj_tt_set *s, const mj_tt_sample *x) {
 
 /* ---- features ---- */
 
-/* The low four bits of Python's int(v) for a step's "open" value. */
-static int open_bits(const mj_json *d, uint32_t v, unsigned *bits) {
-    const mj_jnode *x;
-    if (!mj_json_truthy(d, v)) { *bits = 0; return 1; } /* int(open or 0) */
-    x = &d->v[v];
-    switch (x->kind) {
-    case MJ_J_TRUE: *bits = 1; return 1;
-    case MJ_J_INT: *bits = (unsigned)((uint64_t)x->i & 15u); return 1;
-    case MJ_J_FLOAT: {
-        double t;
-        if (!isfinite(x->f)) return 0;
-        t = trunc(x->f);
-        /* past 2^63 a double is a multiple of 2^11, so its low bits are 0 */
-        *bits = fabs(t) < 9223372036854775808.0 ? (unsigned)((uint64_t)(int64_t)t & 15u) : 0u;
-        return 1;
-    }
-    case MJ_J_BIGINT: {
-        const char *s = d->t + x->s_off;
-        uint32_t i = 0, m = 0;
-        int neg = s[0] == '-';
-        for (i = neg ? 1u : 0u; i < x->s_len; ++i) m = (m * 10u + (uint32_t)(s[i] - '0')) & 15u;
-        *bits = neg ? ((16u - m) & 15u) : m;
-        return 1;
-    }
-    case MJ_J_STR: { /* int("5"): optional spaces, sign, digits with single underscores */
-        const char *s = d->t + x->s_off;
-        size_t a = 0, e = x->s_len;
-        int neg = 0, any = 0, us = 0;
-        uint32_t m = 0;
-        while (a < e && (s[a] == ' ' || (s[a] >= '\t' && s[a] <= '\r'))) ++a;
-        while (e > a && (s[e - 1] == ' ' || (s[e - 1] >= '\t' && s[e - 1] <= '\r'))) --e;
-        if (a < e && (s[a] == '+' || s[a] == '-')) neg = s[a++] == '-';
-        for (; a < e; ++a) {
-            if (s[a] == '_') {
-                if (!any || us) return 0;
-                us = 1;
-                continue;
-            }
-            if (s[a] < '0' || s[a] > '9') return 0;
-            m = (m * 10u + (uint32_t)(s[a] - '0')) & 15u;
-            any = 1;
-            us = 0;
-        }
-        if (!any || us) return 0;
-        *bits = neg ? ((16u - m) & 15u) : m;
-        return 1;
-    }
-    default: return 0;
-    }
-}
-
 static int action_of(const mj_json *d, uint32_t v, uint8_t *a) {
     double f;
     if (!mj_json_is_number(d, v) || d->v[v].kind == MJ_J_BIGINT) return 0;
@@ -146,7 +95,7 @@ mj_status mj_tt_features(const mj_replay_run *run, mj_tt_set *out, char msg[96])
         memset(&x, 0, sizeof x);
         here = hs_has(&vis, &run->doc, s->state); /* states were checked hashable by the replay */
         hs_add(&vis, &run->doc, s->state);
-        if (!open_bits(&run->doc, s->open, &bits)) {
+        if (!mj_replay_open_bits(&run->doc, s->open, &bits)) {
             if (msg) snprintf(msg, 96, "%.48s step %u: open is not a number", run->id, (unsigned)i);
             st = MJ_E_INVAL;
             break;

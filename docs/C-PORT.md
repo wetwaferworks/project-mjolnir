@@ -20,8 +20,8 @@ considered for removal, and that is a separate, explicit decision.
 | `replay.py` (run logs, chain check, steps, automatic labels, folder scan) | `mj_replay.h`, `mj_json.h`, `mj_m1 replays` | Ported. The same folders give byte-identical replay dumps. |
 | `grades.py` | `mj_grades.h`, `mj_m1 grade`, `mj_m1 grades` | Ported. Same ledger records; each side reads the other's grades. |
 | `toy.py`: `features`; `toytrain.py`; `split_runs` from `real/edit.py`; the `toy-seed` and `toy-nap` commands | `mj_toytrain.h`, `mj_m1 toy-seed`, `mj_m1 toy-nap` | Ported, on the processor (32 weights: a GPU would only add transfer time). Same loss, optimizer, clamps, gates, store records and ledger fields; the minibatches come from splitmix64 instead of PyTorch's generator (see below). |
-| `labeler.py` (the local grading page) | | Not yet. |
-| `__main__.py` | `mj_m1`, `mj_real` | The replay, grade and toy commands and the real-weight commands without model code have C versions; `label`, `real-dream` and `real-eval` do not. |
+| `labeler.py` (the local grading page) | `mj_labeler.h`, `mj_m1 label` | Ported: the same page, the same order of steps, the same answers and the same grades ledger. Served on 127.0.0.1 only, with the same host check and request marker. |
+| `__main__.py` | `mj_m1`, `mj_real` | The replay, grade and toy commands and the real-weight commands without model code have C versions, and so does `label`; `real-dream` and `real-eval` do not. |
 
 ## Parity
 
@@ -74,6 +74,15 @@ replays, grades and the toy nap:
   apart (a few tenths of a weight unit) because momentum carries rounding
   differences forward, which is why the weights are compared on the short
   run.
+- **Labeling page**: `mj_m1 label --no-browser` runs on a free port while a
+  Python `Session` walks the same runs (two normal runs and one with awkward
+  values: `true` as a coordinate and a token, `1.0` as an action, text and
+  missing actions, a 20-digit token, proposal scores that round on the third
+  decimal, "open" as text and as a fraction). The page bytes must equal
+  Python's `PAGE`; every answer to `/api/next`, grade, skip and back must
+  equal Python's view as JSON; requests without the marker or from another
+  host are refused; and at the end both grades ledgers give the same latest
+  grade per step. Measured: 22 views, all equal.
 
 **Tolerance for the edited weights.** Python computes `U @ V` with a float32
 matrix multiply whose summation order belongs to the math library. C sums
@@ -115,6 +124,15 @@ without floating-point contraction). They give the same bytes:
   only checked this on the copy path: pointed at the original folder itself,
   it finds an "identical copy" and writes its state file into the original
   folder (the model file is not touched, and a later apply is refused).
+- **Labeling page.** Beyond the Python server: a connection that sends
+  nothing (or reads nothing) is dropped after 5 seconds instead of holding
+  the page up, request headers are capped at 16 KiB, and on Windows the port
+  is bound exclusively, so no other program can listen on it as well. The
+  C server also reads what is left of a refused request before closing.
+  The Python server answers a refused POST without reading its body and
+  closes; on Windows that resets the connection, and the client can lose the
+  403 (`py_labeler`'s `test_http` fails this way about one run in eight
+  there).
 - **Ledger appends (M1) are unchanged**: verify, append, verify again, as
   in Python. Two writers appending to one ledger at the same moment are not
   kept apart; run one session per data folder. Closing that gap needs a
@@ -143,6 +161,9 @@ either side:
   proposals that are null or a number, a list used as a state, a decision
   ended without being advised, and an "open" that is a non-empty list or
   text that is not a number (C refuses these with a message);
+- runs with a position that is not a whole number: Python's labeling page
+  fails while drawing the map for any step of such a run (the request gets
+  no answer); C leaves that point off the map;
 - symbolic links and junctions in a run folder (Python's glob follows them;
   C skips them), folders more than 32 deep, and more than 4,096 run logs in
   one scan.
@@ -164,11 +185,11 @@ parity tests above cover it. Nothing has been deleted.
   and goes with them), once the dream calls the C version.
 - `real/session.py`: `register`, `apply`, `base_sha`, and the `real-register`,
   `real-apply` and `real-verify` commands in `__main__.py`.
+- `labeler.py` and the `label` command in `__main__.py`.
 - `replay.py`, `grades.py` and `toytrain.py`, and in `__main__.py` the
-  `replays`, `toy-seed` and `toy-nap` commands. While `labeler.py` and
-  `real/edit.py` stay, they still import `replay` and `grades` (the dream
-  reads replays to build its examples), so these files go only when those
-  do.
+  `replays`, `toy-seed` and `toy-nap` commands. `real/edit.py` still
+  imports `replay` and `grades` (the dream reads replays to build its
+  examples), so these files go only when the dream does.
 - `toy.py`: `features`; `load`, `save` and `act` were already in C
   (`mj_toy.h`) and are used by the Python nap and its tests.
 

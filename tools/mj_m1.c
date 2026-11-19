@@ -2,6 +2,7 @@
  *
  *   mj_m1 replays      --runs FOLDER [FOLDER ...]
  *   mj_m1 replays-json --runs FOLDER [FOLDER ...]
+ *   mj_m1 label        --runs FOLDER ... --data FOLDER [--port 8765] [--grader NAME] [--no-browser]
  *   mj_m1 grade        --data FOLDER --replay ID --step N --label good|bad|productive [--grader NAME] [--auto LABEL]
  *   mj_m1 grades       --data FOLDER
  *   mj_m1 toy-seed     --data FOLDER
@@ -13,6 +14,7 @@
  * MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works. */
 #include "mjolnir/mj_fs.h"
 #include "mjolnir/mj_grades.h"
+#include "mjolnir/mj_labeler.h"
 #include "mjolnir/mj_replay.h"
 #include "mjolnir/mj_store.h"
 #include "mjolnir/mj_toytrain.h"
@@ -26,6 +28,7 @@ static const char *USAGE =
     "usage:\n"
     "  mj_m1 replays      --runs FOLDER [FOLDER ...]\n"
     "  mj_m1 replays-json --runs FOLDER [FOLDER ...]\n"
+    "  mj_m1 label        --runs FOLDER ... --data FOLDER [--port 8765] [--grader NAME] [--no-browser]\n"
     "  mj_m1 grade        --data FOLDER --replay ID --step N --label good|bad|productive [--grader NAME] [--auto LABEL]\n"
     "  mj_m1 grades       --data FOLDER\n"
     "  mj_m1 toy-seed     --data FOLDER\n"
@@ -37,8 +40,8 @@ typedef struct opts {
     const char *roots[MAX_ROOTS];
     uint32_t n_roots;
     const char *data, *replay, *label, *grader, *autolab, *id;
-    long long step, steps, max_shift, seed;
-    int have_step, integrate;
+    long long step, steps, max_shift, seed, port;
+    int have_step, integrate, no_browser;
 } opts;
 
 static int num(const char *s, long long *out) {
@@ -56,6 +59,7 @@ static int parse(int argc, char **argv, opts *o) {
     o->steps = 300;
     o->max_shift = 2000;
     o->seed = 1;
+    o->port = 8765;
     for (i = 2; i < argc; ++i) {
         const char *a = argv[i];
         if (strcmp(a, "--runs") == 0) {
@@ -65,6 +69,8 @@ static int parse(int argc, char **argv, opts *o) {
             }
         } else if (strcmp(a, "--integrate") == 0) {
             o->integrate = 1;
+        } else if (strcmp(a, "--no-browser") == 0) {
+            o->no_browser = 1;
         } else if (i + 1 < argc && strlen(argv[i + 1]) < MJ_PATH_MAX) {
             const char *v = argv[++i];
             if (strcmp(a, "--data") == 0) o->data = v;
@@ -77,6 +83,7 @@ static int parse(int argc, char **argv, opts *o) {
             else if (strcmp(a, "--steps") == 0) { if (!num(v, &o->steps) || o->steps < 1 || o->steps > 1000000) return 0; }
             else if (strcmp(a, "--max-shift-bp") == 0) { if (!num(v, &o->max_shift) || o->max_shift < 0 || o->max_shift > 10000) return 0; }
             else if (strcmp(a, "--seed") == 0) { if (!num(v, &o->seed)) return 0; }
+            else if (strcmp(a, "--port") == 0) { if (!num(v, &o->port) || o->port < 1 || o->port > 65535) return 0; }
             else return 0;
         } else {
             return 0;
@@ -153,6 +160,23 @@ int main(int argc, char **argv) {
     }
 
     if (o.data == NULL) { fputs(USAGE, stderr); return 2; }
+
+    if (strcmp(cmd, "label") == 0) {
+        mj_replay_set set;
+        mj_lab lab;
+        char gp[MJ_PATH_MAX];
+        if (o.n_roots == 0) { fputs(USAGE, stderr); return 2; }
+        st = mj_replay_load_all(o.roots, o.n_roots, &b, skipped, NULL, &set);
+        if (st != MJ_OK) { fprintf(stderr, "refused: could not scan the run folders (%s)\n", mj_status_name(st)); return 2; }
+        if (mj_fs_mkdir(o.data) != MJ_OK || !join(gp, o.data, "grades.mjl")) { fprintf(stderr, "refused: bad data folder\n"); return 2; }
+        st = mj_lab_open(&lab, &set, gp, o.grader, (uint16_t)o.port, &b);
+        if (st != MJ_OK) { fprintf(stderr, "refused: the grades ledger does not verify (%s)\n", mj_status_name(st)); return 2; }
+        st = mj_lab_serve(&lab, !o.no_browser);
+        fprintf(stderr, "refused: could not listen on 127.0.0.1:%lld (%s)\n", o.port, mj_status_name(st));
+        mj_lab_close(&lab);
+        mj_replay_set_free(&set);
+        return 2;
+    }
 
     if (strcmp(cmd, "grade") == 0) {
         char lp[MJ_PATH_MAX], msg[96];

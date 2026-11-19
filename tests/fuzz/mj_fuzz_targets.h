@@ -7,6 +7,7 @@
 
 #include "mjolnir/mj_delta.h"
 #include "mjolnir/mj_json.h"
+#include "mjolnir/mj_labeler.h"
 #include "mjolnir/mj_ledger.h"
 #include "mjolnir/mj_safet.h"
 #include "mjolnir/mj_score.h"
@@ -15,6 +16,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+#include "../mj_runlog.h"
 
 #define MJ_FUZZ_REQUIRE(c) do { if (!(c)) abort(); } while (0)
 
@@ -195,6 +198,47 @@ static int mj_fuzz_json(const uint8_t *d, size_t n) {
     mj_json_free(&x);
     mj_json_free(&y);
     MJ_FUZZ_REQUIRE(b.used == 0);
+    return 0;
+}
+
+/* One request to the labeling page, over a session on one small run whose
+ * grades file sits in a folder that does not exist, so no input can write:
+ * every answer is a whole HTTP/1.0 response with a known status, and the
+ * session never takes a grade. */
+static int mj_fuzz_http(const uint8_t *d, size_t n) {
+    static mj_budget b;
+    static mj_replay_set set;
+    static mj_lab s;
+    static int ready;
+    mj_jout r;
+    size_t used, total;
+    int code, done;
+    if (!ready) {
+        char dir[MJ_PATH_MAX], run[MJ_PATH_MAX], gp[MJ_PATH_MAX];
+        const char *base = getenv("MJ_TEST_TMP");
+        const char *roots[1];
+        mj_budget_init(&b, 256u << 20);
+        snprintf(dir, sizeof dir, "%s/fuzz_lab", base ? base : ".");
+        (void)mj_fs_mkdir(dir);
+        snprintf(run, sizeof run, "%s/r.jsonl", dir);
+        snprintf(gp, sizeof gp, "%s/no-such-folder/grades.mjl", dir);
+        MJ_FUZZ_REQUIRE(mj_t_write_run(run, MJ_T_MOVES, (int)(sizeof MJ_T_MOVES / sizeof MJ_T_MOVES[0]), 0, 0));
+        roots[0] = dir;
+        MJ_FUZZ_REQUIRE(mj_replay_load_all(roots, 1, &b, NULL, NULL, &set) == MJ_OK && set.n == 1);
+        MJ_FUZZ_REQUIRE(mj_lab_open(&s, &set, gp, "JD", 8765, &b) == MJ_OK);
+        ready = 1;
+    }
+    used = b.used;
+    done = (int)s.done.n;
+    if (mj_lab_http_complete((const char *)d, n, &total) == 1) MJ_FUZZ_REQUIRE(total <= n);
+    mj_jout_init(&r, 1u << 22);
+    mj_lab_http(&s, (const char *)d, n, &r);
+    MJ_FUZZ_REQUIRE(!r.failed && r.n > 12 && memcmp(r.p, "HTTP/1.0 ", 9) == 0);
+    code = atoi(r.p + 9);
+    MJ_FUZZ_REQUIRE(code == 200 || code == 400 || code == 403 || code == 404 || code == 431 || code == 500 || code == 501);
+    MJ_FUZZ_REQUIRE(strstr(r.p, "\r\n\r\n") != NULL);
+    mj_jout_free(&r);
+    MJ_FUZZ_REQUIRE(b.used == used && (int)s.done.n == done);
     return 0;
 }
 
