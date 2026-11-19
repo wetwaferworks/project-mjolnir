@@ -38,6 +38,11 @@ mj_status mj_fs_append_durable(const char *path, const void *data, size_t n);
 typedef int (*mj_fs_list_fn)(const char *name, void *user);
 mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void *user);
 
+/* Like mj_fs_list, but also visits folders: fn(name, is_dir, user). Symbolic
+ * links, junctions and other special entries are skipped. */
+typedef int (*mj_fs_list_typed_fn)(const char *name, int is_dir, void *user);
+mj_status mj_fs_list_typed(const char *dir, size_t max_entries, mj_fs_list_typed_fn fn, void *user);
+
 /* Monotonic milliseconds, for time ceilings only (never recorded in hashes). */
 uint64_t mj_clock_ms(void);
 

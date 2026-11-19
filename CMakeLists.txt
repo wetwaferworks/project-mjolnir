@@ -46,7 +46,11 @@ set(MJ_SOURCES
   src/mj_workcopy.c
   src/mj_session.c
   src/mj_par.c
-  src/mj_lowrank.c)
+  src/mj_lowrank.c
+  src/mj_json.c
+  src/mj_replay.c
+  src/mj_grades.c
+  src/mj_toytrain.c)
 
 # The GPU path for applying edits to real weights. Off by default; the CPU
 # path gives the same bytes.
@@ -84,7 +88,7 @@ if(MJ_CUDA)
   target_compile_definitions(mjolnir PUBLIC MJ_HAVE_CUDA=1)
 endif()
 
-foreach(tool mj_nap mj_nightly mj_ledger_verify mj_real)
+foreach(tool mj_nap mj_nightly mj_ledger_verify mj_real mj_m1)
   add_executable(${tool} tools/${tool}.c)
   target_link_libraries(${tool} PRIVATE mjolnir)
   target_compile_options(${tool} PRIVATE ${MJ_WARN})
@@ -96,7 +100,7 @@ set(MJ_TEST_TMP ${CMAKE_BINARY_DIR}/test-tmp)
 file(MAKE_DIRECTORY ${MJ_TEST_TMP})
 set(MJ_TEST_ENV "MJ_TEST_TMP=${MJ_TEST_TMP}")
 
-foreach(t test_hash test_store test_ledger test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank)
+foreach(t test_hash test_store test_ledger test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank test_replay test_toytrain)
   add_executable(${t} tests/${t}.c)
   target_link_libraries(${t} PRIVATE mjolnir)
   target_include_directories(${t} PRIVATE tests)
@@ -125,7 +129,7 @@ if(MJ_LIBFUZZER)
   else()
     target_compile_options(mjolnir_fuzz PRIVATE -fsanitize=fuzzer-no-link)
   endif()
-  foreach(ft ledger manifest toy score safet delta)
+  foreach(ft ledger manifest toy score safet delta json)
     add_executable(mj_libfuzz_${ft} tests/fuzz/mj_libfuzzer.c)
     target_link_libraries(mj_libfuzz_${ft} PRIVATE mjolnir_fuzz)
     target_include_directories(mj_libfuzz_${ft} PRIVATE tests/fuzz)
@@ -188,7 +192,7 @@ if(MJ_PYTHON_TESTS)
     endif()
   endif()
   if(MJ_PYTHON)
-    foreach(pt ledger store replay labeler toytrain real c_port)
+    foreach(pt ledger store replay labeler toytrain real c_port c_port_m1)
       add_test(NAME py_${pt} COMMAND ${MJ_PYTHON} -m unittest -v tests.test_${pt}
                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python)
       set_tests_properties(py_${pt} PROPERTIES

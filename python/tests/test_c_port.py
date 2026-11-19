@@ -65,12 +65,12 @@ def bf16_steps(a, b):
     return int((d != 0).sum()), int(d.max()) if d.size else 0
 
 
-@unittest.skipUnless(has_torch() and tool("mj_real"), "needs torch, numpy and the C tools")
-
 def slurp(path):
     with open(path, "rb") as f:
         return f.read()
 
+
+@unittest.skipUnless(has_torch() and tool("mj_real"), "needs torch, numpy and the C tools")
 class CPortParity(unittest.TestCase):
     def setUp(self):
         self.real = tool("mj_real")

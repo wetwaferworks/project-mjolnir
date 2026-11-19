@@ -7,7 +7,7 @@ This file is for coding assistants and other automated contributors working in t
 | Path | Language | Role |
 |---|---|---|
 | `include/mjolnir/`, `src/` | C17 (one CUDA file) | The library. The reference for every file format. `src/mj_apply_cuda.cu` and `src/mj_lowrank_cuda.cu` are built only with `-DMJ_CUDA=ON`. |
-| `tools/` | C17 | `mj_nap`, `mj_nightly`, `mj_ledger_verify`, `mj_store_verify`, `mj_real`. |
+| `tools/` | C17 | `mj_nap`, `mj_nightly`, `mj_ledger_verify`, `mj_store_verify`, `mj_real`, `mj_m1`. |
 | `tests/`, `tests/fuzz/` | C17 | Unit tests and the built-in fuzzer. |
 | `python/mjolnir/` | Python 3.11+ | The M1 package; `real/` is the real-weight edit path. |
 | `python/tests/` | Python | unittest tests, including C/Python cross-checks. |
@@ -18,7 +18,7 @@ This file is for coding assistants and other automated contributors working in t
 ```
 cmake -S . -B build
 cmake --build build --config Release
-ctest --test-dir build -C Release          # expect 24/24 passing
+ctest --test-dir build -C Release          # expect 27/27 passing
 cd python && python -m mjolnir --help
 ```
 

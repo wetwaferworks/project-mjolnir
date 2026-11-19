@@ -8,6 +8,6 @@
 #endif
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    (void)mj_fuzz_ledger; (void)mj_fuzz_manifest; (void)mj_fuzz_toy; (void)mj_fuzz_score; (void)mj_fuzz_safet; (void)mj_fuzz_delta;
+    (void)mj_fuzz_ledger; (void)mj_fuzz_manifest; (void)mj_fuzz_toy; (void)mj_fuzz_score; (void)mj_fuzz_safet; (void)mj_fuzz_delta; (void)mj_fuzz_json;
     return MJ_FUZZ_TARGET(data, size);
 }

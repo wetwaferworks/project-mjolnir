@@ -21,6 +21,10 @@ Public C headers for the M0 library, under `include/mjolnir/`. Each header has a
 | `mj_workcopy.h` | Checksums, the working copy, its state file and dirty marker, and checkout. |
 | `mj_session.h` | Register and apply, recorded in the real-weight ledger. |
 | `mj_lowrank.h` | The low-rank edit from keys, outputs and gradients: whitening, QR, SVD, truncation; cuBLAS for the big products. |
+| `mj_json.h` | A small JSON reader that answers like Python's `json` and `==` (used for PCHIE run logs). |
+| `mj_replay.h` | Replays from PCHIE run logs: chain check, steps, automatic labels, folder scan. |
+| `mj_grades.h` | Grades in their own hash-chained ledger; the latest grade per step. |
+| `mj_toytrain.h` | The toy nap from replays: features, training, gates, store and ledger. |
 | `mj_par.h` | Splitting a loop across threads and joining them, with no locks. |
 
 File formats are specified in [docs/FORMATS.md](../docs/FORMATS.md).

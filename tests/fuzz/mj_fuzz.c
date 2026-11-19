@@ -97,7 +97,7 @@ typedef struct target {
     size_t seed_len;
 } target;
 
-#define N_TARGETS 6
+#define N_TARGETS 7
 static target T[N_TARGETS];
 
 static void seeds(void) {
@@ -114,6 +114,15 @@ static void seeds(void) {
     T[3].name = "score"; T[3].fn = mj_fuzz_score;
     T[4].name = "safet"; T[4].fn = mj_fuzz_safet;
     T[5].name = "delta"; T[5].fn = mj_fuzz_delta;
+    T[6].name = "json"; T[6].fn = mj_fuzz_json;
+    {
+        static const char line[] =
+            "{\"format\":\"pchie.research.v1\",\"event\":\"advise\",\"decision\":1,\"x\":-0.0,\"key\":true,"
+            "\"open\":5,\"proposals\":[[7,600000,1],[8,4.5e-3,1]],\"t\":\"caf\\u00e9 \\ud83d\\ude00\",\"n\":null,"
+            "\"big\":123456789012345678901,\"o\":{\"b\":1,\"a\":[],\"b\":2},\"prev\":\"00\"}";
+        memcpy(T[6].seed, line, sizeof line - 1);
+        T[6].seed_len = sizeof line - 1;
+    }
 
     /* a real two-line ledger image */
     {

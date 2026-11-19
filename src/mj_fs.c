@@ -183,6 +183,29 @@ mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void
     return st;
 }
 
+mj_status mj_fs_list_typed(const char *dir, size_t max_entries, mj_fs_list_typed_fn fn, void *user) {
+    char pat[MJ_PATH_MAX];
+    wchar_t wp[MJ_PATH_MAX];
+    WIN32_FIND_DATAW fd;
+    HANDLE h;
+    size_t seen = 0;
+    mj_status st = MJ_OK;
+    if (mj_path_join(pat, sizeof pat, dir, "*") != MJ_OK || !widen(pat, wp, (int)MJ_PATH_MAX)) return MJ_E_LIMIT;
+    h = FindFirstFileW(wp, &fd);
+    if (h == INVALID_HANDLE_VALUE) return (GetLastError() == ERROR_FILE_NOT_FOUND) ? MJ_OK : MJ_E_IO;
+    do {
+        char name[MJ_PATH_MAX];
+        int is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+        if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+        if (WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, name, (int)sizeof name, NULL, NULL) <= 0) continue;
+        if (++seen > max_entries) { st = MJ_E_LIMIT; break; }
+        if (fn(name, is_dir, user)) break;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return st;
+}
+
 uint64_t mj_clock_ms(void) { return (uint64_t)GetTickCount64(); }
 
 #else /* POSIX */
@@ -332,6 +355,25 @@ mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void
         if (lstat(full, &s) != 0 || !S_ISREG(s.st_mode)) continue;
         if (++seen > max_entries) { st = MJ_E_LIMIT; break; }
         if (fn(e->d_name, user)) break;
+    }
+    closedir(d);
+    return st;
+}
+
+mj_status mj_fs_list_typed(const char *dir, size_t max_entries, mj_fs_list_typed_fn fn, void *user) {
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    size_t seen = 0;
+    mj_status st = MJ_OK;
+    if (d == NULL) return (errno == ENOENT || errno == ENOTDIR) ? MJ_OK : MJ_E_IO;
+    while ((e = readdir(d)) != NULL) {
+        char full[MJ_PATH_MAX];
+        struct stat s;
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (mj_path_join(full, sizeof full, dir, e->d_name) != MJ_OK) continue;
+        if (lstat(full, &s) != 0 || !(S_ISREG(s.st_mode) || S_ISDIR(s.st_mode))) continue;
+        if (++seen > max_entries) { st = MJ_E_LIMIT; break; }
+        if (fn(e->d_name, S_ISDIR(s.st_mode), user)) break;
     }
     closedir(d);
     return st;

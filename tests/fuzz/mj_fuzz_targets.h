@@ -6,6 +6,7 @@
 #define MJ_FUZZ_TARGETS_H
 
 #include "mjolnir/mj_delta.h"
+#include "mjolnir/mj_json.h"
 #include "mjolnir/mj_ledger.h"
 #include "mjolnir/mj_safet.h"
 #include "mjolnir/mj_score.h"
@@ -155,5 +156,46 @@ static int mj_fuzz_delta(const uint8_t *d, size_t n) {
 }
 
 typedef int (*mj_fuzz_fn)(const uint8_t *, size_t);
+
+static int has_raw_surrogate(const uint8_t *d, size_t n) {
+    size_t i;
+    for (i = 0; i + 1 < n; ++i)
+        if (d[i] == 0xED && d[i + 1] >= 0xA0) return 1;
+    return 0;
+}
+
+/* A JSON text, as a run log line: anything accepted writes out as a text
+ * that reads back to an equal value and writes out the same again. */
+static int mj_fuzz_json(const uint8_t *d, size_t n) {
+    static mj_budget b;
+    mj_json x, y;
+    mj_jout o1, o2;
+    uint32_t r1, r2;
+    if (b.cap == 0) mj_budget_init(&b, 512u << 20);
+    mj_json_init(&x, &b, 1u << 20, 1u << 22);
+    mj_json_init(&y, &b, 1u << 20, 1u << 22);
+    if (mj_json_parse(&x, (const char *)d, n, &r1) == MJ_OK) {
+        mj_jout_init(&o1, 1u << 24);
+        mj_jout_init(&o2, 1u << 24);
+        mj_jout_value(&o1, &x, r1);
+        MJ_FUZZ_REQUIRE(!o1.failed);
+        MJ_FUZZ_REQUIRE(mj_json_eq(&x, r1, &x, r1)); /* no NaN can appear: there is no literal for it */
+        /* Infinity is written as Python writes it but is not JSON, and raw
+         * encoded surrogate halves join into one character on the way back
+         * (in Python too), so only the other texts must round-trip */
+        if (strstr(o1.p, "Infinity") == NULL && !has_raw_surrogate(d, n)) {
+            MJ_FUZZ_REQUIRE(mj_json_parse(&y, o1.p, o1.n, &r2) == MJ_OK);
+            MJ_FUZZ_REQUIRE(mj_json_eq(&x, r1, &y, r2));
+            mj_jout_value(&o2, &y, r2);
+            MJ_FUZZ_REQUIRE(!o2.failed && o1.n == o2.n && memcmp(o1.p, o2.p, o1.n) == 0);
+        }
+        mj_jout_free(&o1);
+        mj_jout_free(&o2);
+    }
+    mj_json_free(&x);
+    mj_json_free(&y);
+    MJ_FUZZ_REQUIRE(b.used == 0);
+    return 0;
+}
 
 #endif

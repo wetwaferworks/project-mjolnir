@@ -17,7 +17,11 @@ considered for removal, and that is a separate, explicit decision.
 | `real/edit.py`: `whiten`, `with_shared_key`, `low_rank` | `mj_lowrank.h`, `mj_real lowrank` | Ported. The three big products with the background keys run through cuBLAS when built with CUDA; Cholesky, Householder QR and Jacobi SVD run on the CPU. All in double. |
 | `real/edit.py`: gradients, background keys, the Evaluator, the strength trials | | Stays with the model code (they run the model). |
 | `real/model.py`, `session.dream`, `session.evaluate` | | Stays in Python for now: it runs the Gemma forward and backward passes and the tokenizer through the transformers library. |
-| `replay.py`, `grades.py`, `toytrain.py`, `labeler.py` | | Not yet. |
+| `replay.py` (run logs, chain check, steps, automatic labels, folder scan) | `mj_replay.h`, `mj_json.h`, `mj_m1 replays` | Ported. The same folders give byte-identical replay dumps. |
+| `grades.py` | `mj_grades.h`, `mj_m1 grade`, `mj_m1 grades` | Ported. Same ledger records; each side reads the other's grades. |
+| `toy.py`: `features`; `toytrain.py`; `split_runs` from `real/edit.py`; the `toy-seed` and `toy-nap` commands | `mj_toytrain.h`, `mj_m1 toy-seed`, `mj_m1 toy-nap` | Ported, on the processor (32 weights: a GPU would only add transfer time). Same loss, optimizer, clamps, gates, store records and ledger fields; the minibatches come from splitmix64 instead of PyTorch's generator (see below). |
+| `labeler.py` (the local grading page) | | Not yet. |
+| `__main__.py` | `mj_m1`, `mj_real` | The replay, grade and toy commands and the real-weight commands without model code have C versions; `label`, `real-dream` and `real-eval` do not. |
 
 ## Parity
 
@@ -42,6 +46,34 @@ ways on a small synthetic model and compares what lands on disk:
   the sign of each singular direction). Plain, whitened, and whitened at
   full rank: relative differences of 1.5e-6 to 3e-6, from Python's float32
   against C's double. The test allows 1e-4.
+
+`python/tests/test_c_port_m1.py` (ctest `py_c_port_m1`) does the same for
+replays, grades and the toy nap:
+
+- **Replays**: a folder of run logs goes through `replay.load_all` and
+  `mj_m1 replays-json`, and both are written as
+  `json.dumps(sort_keys=True, separators=(",", ":"))`. The texts must be
+  identical, and so must the "skipped" messages and the `replays` summary
+  text. The folder is awkward on purpose: repeated keys, `1`, `1.0` and
+  `true` used as the same value, `-0.0`, a 23-digit token, non-ASCII text
+  and file names, CRLF and blank lines, a hidden folder, a copy of a run, a
+  broken hash, a log without a start record, a long first line. Measured: 6
+  runs, 35 steps, 2 skipped, 12,232 identical bytes.
+- **Grades**: Python and C each add grades to one ledger; each side's
+  "latest grade per step" equals the other's, and a C record equals the
+  record Python writes for the same grade, field for field apart from the
+  time.
+- **Toy nap**: C and Python draw minibatches differently, so their
+  candidates differ. The test replays a 40-step C nap in PyTorch with the
+  very same minibatch indices (measured: 0 Q16 units apart on Linux, at most
+  1 on Windows, where the math library's `expf` differs; the test allows 4), then
+  recomputes every gate number of a full 300-step C nap in Python from the C
+  candidate (task, golden and shift scores, largest move, sample counts,
+  gate results, ledger fields): all equal. Finally Python and C nap on
+  one store and ledger in turn. Over 300 steps the two float32 sums drift
+  apart (a few tenths of a weight unit) because momentum carries rounding
+  differences forward, which is why the weights are compared on the short
+  run.
 
 **Tolerance for the edited weights.** Python computes `U @ V` with a float32
 matrix multiply whose summation order belongs to the math library. C sums
@@ -102,7 +134,18 @@ either side:
   when it encodes the sums), and symbolic links in a checksummed folder
   (Python follows them; C lists regular files only);
 - state files naming tensors the model does not have (Python fails with a
-  key error).
+  key error);
+- run logs that are not UTF-8 (Python also detects UTF-16 and UTF-32), that
+  use `NaN` or `Infinity`, or that nest deeper than 512 levels (Python stops
+  with a recursion error at about 1000);
+- run logs where Python stops with an uncaught error instead of skipping
+  the file: a record that is not an object, a reward that is not a number,
+  proposals that are null or a number, a list used as a state, a decision
+  ended without being advised, and an "open" that is a non-empty list or
+  text that is not a number (C refuses these with a message);
+- symbolic links and junctions in a run folder (Python's glob follows them;
+  C skips them), folders more than 32 deep, and more than 4,096 run logs in
+  one scan.
 
 A NaN computed by an edit becomes the bf16 quiet NaN `0x7FC0` (torch's
 scalar rule); real weights and edits never produce one.
@@ -121,6 +164,13 @@ parity tests above cover it. Nothing has been deleted.
   and goes with them), once the dream calls the C version.
 - `real/session.py`: `register`, `apply`, `base_sha`, and the `real-register`,
   `real-apply` and `real-verify` commands in `__main__.py`.
+- `replay.py`, `grades.py` and `toytrain.py`, and in `__main__.py` the
+  `replays`, `toy-seed` and `toy-nap` commands. While `labeler.py` and
+  `real/edit.py` stay, they still import `replay` and `grades` (the dream
+  reads replays to build its examples), so these files go only when those
+  do.
+- `toy.py`: `features`; `load`, `save` and `act` were already in C
+  (`mj_toy.h`) and are used by the Python nap and its tests.
 
 ## Building
 
