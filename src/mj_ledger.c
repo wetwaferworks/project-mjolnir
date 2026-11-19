@@ -205,14 +205,218 @@ mj_status mj_ledger_verify_file(const char *path, mj_budget *b, mj_ledger_state 
     return s;
 }
 
-mj_status mj_ledger_append(const char *path, mj_budget *b, mj_dream_record *r) {
+/* ---- torn tails ---- */
+
+mj_status mj_ledger_check_tail(const char *buf, size_t n, mj_ledger_state *st, uint64_t *bad_line, size_t *good_len,
+                               int *torn) {
+    size_t g = n;
+    mj_status s;
+    if (buf == NULL && n != 0) return MJ_E_INVAL;
+    while (g > 0 && buf[g - 1] != '\n') --g;
+    if (good_len) *good_len = g;
+    if (torn) *torn = g < n;
+    s = mj_ledger_verify_buf(buf, g, st, bad_line);
+    return s;
+}
+
+/* ---- the writer token ---- */
+
+static mj_status token_path_for(const char *ledger, char *out, size_t cap) {
+    int w;
+    if (ledger == NULL || ledger[0] == '\0') return MJ_E_INVAL;
+    w = snprintf(out, cap, "%s.writer", ledger);
+    return (w > 0 && (size_t)w < cap && (size_t)w < MJ_PATH_MAX) ? MJ_OK : MJ_E_LIMIT;
+}
+
+/* MJW1|pid|start|host|since|nonce */
+static int parse_token(const char *t, size_t n, mj_ledger_holder *h) {
+    const char *f[6];
+    size_t fl[6], i, k = 0, st = 0;
+    memset(h, 0, sizeof *h);
+    if (n == 0 || t[n - 1] != '\n') return 0;
+    --n;
+    for (i = 0; i <= n; ++i) {
+        if (i == n || t[i] == '|') {
+            if (k >= 6) return 0;
+            f[k] = t + st;
+            fl[k] = i - st;
+            ++k;
+            st = i + 1;
+        } else if ((unsigned char)t[i] < 0x21 || (unsigned char)t[i] > 0x7E) {
+            return 0;
+        }
+    }
+    if (k != 6 || fl[0] != 4 || memcmp(f[0], "MJW1", 4) != 0) return 0;
+    if (!mj_parse_u64(f[1], fl[1], &h->pid) || !mj_parse_u64(f[2], fl[2], &h->start)) return 0;
+    if (fl[3] == 0 || fl[3] >= sizeof h->host || fl[4] >= sizeof h->since || fl[5] != 32) return 0;
+    memcpy(h->host, f[3], fl[3]);
+    memcpy(h->since, f[4], fl[4]);
+    memcpy(h->nonce, f[5], 32);
+    if (!when_valid(h->since)) return 0;
+    for (i = 0; i < 32; ++i) {
+        char c = h->nonce[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
+    }
+    return 1;
+}
+
+static void holder_liveness(mj_ledger_holder *h) {
+    char me[64];
+    mj_host_name(me, sizeof me);
+    h->same_host = strcmp(me, h->host) == 0;
+    h->running = h->same_host ? mj_proc_running(h->pid, h->start) : -1;
+}
+
+static mj_status read_token(const char *tp, char *buf, size_t cap, size_t *len) {
+    mj_budget tb;
+    uint8_t *d;
+    size_t n;
+    mj_status s;
+    mj_budget_init(&tb, MJ_LEDGER_TOKEN_MAX + 64u);
+    s = mj_fs_read_all(tp, MJ_LEDGER_TOKEN_MAX, &tb, &d, &n);
+    if (s == MJ_E_LIMIT) return MJ_E_CORRUPT;
+    if (s != MJ_OK) return s;
+    if (n >= cap) { mj_bfree(&tb, d, n ? n : 1); return MJ_E_CORRUPT; }
+    memcpy(buf, d, n);
+    buf[n] = '\0';
+    *len = n;
+    mj_bfree(&tb, d, n ? n : 1);
+    return MJ_OK;
+}
+
+mj_status mj_ledger_writer_holder(const char *ledger, mj_ledger_holder *h) {
+    char tp[MJ_PATH_MAX], t[MJ_LEDGER_TOKEN_MAX + 1];
+    size_t n = 0;
+    mj_status s;
+    mj_ledger_holder tmp;
+    if (h == NULL) h = &tmp;
+    memset(h, 0, sizeof *h);
+    if ((s = token_path_for(ledger, tp, sizeof tp)) != MJ_OK) return s;
+    s = read_token(tp, t, sizeof t, &n);
+    if (s == MJ_E_NOTFOUND) return s;
+    if (s != MJ_OK) { h->running = -1; return s == MJ_E_IO ? MJ_E_IO : MJ_E_CORRUPT; }
+    if (!parse_token(t, n, h)) { memset(h, 0, sizeof *h); h->running = -1; return MJ_E_CORRUPT; }
+    holder_liveness(h);
+    return MJ_OK;
+}
+
+void mj_ledger_holder_describe(const mj_ledger_holder *h, char *out, size_t cap) {
+    const char *state = !h->same_host ? "on another host, cannot check here"
+                        : h->running == 1 ? "still running"
+                        : h->running == 0 ? "not running any more"
+                                          : "may still be running";
+    if (h->host[0] == '\0') snprintf(out, cap, "the writer token cannot be read; treating the ledger as held");
+    else
+        snprintf(out, cap, "process %llu on %s since %s (%s)", (unsigned long long)h->pid, h->host, h->since, state);
+}
+
+mj_status mj_ledger_writer_claim(const char *ledger, mj_ledger_writer *w, mj_ledger_holder *holder) {
+    uint64_t pid, start, tick;
+    uint8_t seed[48], dig[MJ_SHA256_LEN];
+    char host[64], when[21], nonce[MJ_SHA256_HEX];
+    uint64_t c;
+    size_t ll;
+    int n;
+    mj_status s;
+    if (w == NULL || ledger == NULL) return MJ_E_INVAL;
+    memset(w, 0, sizeof *w);
+    if (holder) memset(holder, 0, sizeof *holder);
+    ll = strlen(ledger);
+    if (ll == 0 || ll >= sizeof w->ledger) return MJ_E_LIMIT;
+    memcpy(w->ledger, ledger, ll + 1);
+    if ((s = token_path_for(ledger, w->token_path, sizeof w->token_path)) != MJ_OK) return s;
+    mj_proc_self(&pid, &start);
+    mj_host_name(host, sizeof host);
+    if ((s = mj_utc_now(when)) != MJ_OK) return s;
+    /* the nonce only has to tell our token from anyone else's */
+    tick = mj_clock_ms();
+    { volatile int here = 0; c = (uint64_t)(uintptr_t)&here; (void)here; } /* differs between threads */
+    memset(seed, 0, sizeof seed);
+    memcpy(seed, &pid, 8);
+    memcpy(seed + 8, &start, 8);
+    memcpy(seed + 16, &tick, 8);
+    memcpy(seed + 24, &c, 8);
+    {
+        const void *addr = (const void *)w;
+        memcpy(seed + 32, &addr, sizeof addr < 16 ? sizeof addr : 16);
+    }
+    mj_sha256(seed, sizeof seed, dig);
+    mj_hex_encode(dig, 16, nonce);
+    n = snprintf(w->token, sizeof w->token, "MJW1|%llu|%llu|%s|%s|%s\n", (unsigned long long)pid,
+                 (unsigned long long)start, host, when, nonce);
+    if (n <= 0 || (size_t)n >= sizeof w->token) return MJ_E_LIMIT;
+    w->token_len = (size_t)n;
+    s = mj_fs_create_exclusive(w->token_path, w->token, w->token_len);
+    if (s == MJ_E_EXISTS) {
+        mj_ledger_holder h;
+        mj_status hs = mj_ledger_writer_holder(ledger, &h);
+        if (hs == MJ_E_NOTFOUND) memset(&h, 0, sizeof h), h.running = -1; /* it went away just now: still refuse, never race */
+        if (holder) *holder = h;
+        return MJ_E_BUSY;
+    }
+    if (s != MJ_OK) return s;
+    w->held = 1;
+    return MJ_OK;
+}
+
+mj_status mj_ledger_writer_release(mj_ledger_writer *w) {
+    char t[MJ_LEDGER_TOKEN_MAX + 1];
+    size_t n = 0;
+    mj_status s;
+    if (w == NULL || !w->held) return MJ_E_INVAL;
+    s = read_token(w->token_path, t, sizeof t, &n);
+    if (s != MJ_OK || n != w->token_len || memcmp(t, w->token, n) != 0) {
+        w->held = 0;
+        return MJ_E_FORBIDDEN; /* not ours any more: leave it alone */
+    }
+    s = mj_fs_remove(w->token_path);
+    if (s == MJ_OK) w->held = 0;
+    return s;
+}
+
+mj_status mj_ledger_writer_release_stale(const char *ledger, mj_ledger_holder *h, char *moved_to, size_t moved_cap) {
+    char tp[MJ_PATH_MAX], t[MJ_LEDGER_TOKEN_MAX + 1], t2[MJ_LEDGER_TOKEN_MAX + 1], dst[MJ_PATH_MAX], when[21], stamp[16];
+    size_t n = 0, n2 = 0, i, k = 0;
+    mj_ledger_holder tmp;
+    mj_status s;
+    int w;
+    if (h == NULL) h = &tmp;
+    memset(h, 0, sizeof *h);
+    if (moved_to && moved_cap) moved_to[0] = '\0';
+    if ((s = token_path_for(ledger, tp, sizeof tp)) != MJ_OK) return s;
+    if ((s = read_token(tp, t, sizeof t, &n)) != MJ_OK) return s == MJ_E_NOTFOUND ? MJ_E_NOTFOUND : MJ_E_FORBIDDEN;
+    if (!parse_token(t, n, h)) return MJ_E_FORBIDDEN; /* unreadable: a person has to look at it */
+    holder_liveness(h);
+    if (!h->same_host) return MJ_E_FORBIDDEN;
+    if (h->running != 0) return MJ_E_BUSY; /* running, or cannot tell: never take over */
+    if ((s = mj_utc_now(when)) != MJ_OK) return s;
+    for (i = 0; when[i] && k + 1 < sizeof stamp; ++i)
+        if (when[i] >= '0' && when[i] <= '9') stamp[k++] = when[i];
+    stamp[k] = '\0';
+    w = snprintf(dst, sizeof dst, "%s.stale-%s-%.8s", tp, stamp, h->nonce);
+    if (w <= 0 || (size_t)w >= sizeof dst || (size_t)w >= MJ_PATH_MAX) return MJ_E_LIMIT;
+    if ((s = mj_fs_rename_noreplace(tp, dst)) != MJ_OK) return s == MJ_E_NOTFOUND ? MJ_E_BUSY : s;
+    /* make sure what we moved is the token we judged; if a new writer slipped in between, put theirs back */
+    if (read_token(dst, t2, sizeof t2, &n2) != MJ_OK || n2 != n || memcmp(t, t2, n) != 0) {
+        (void)mj_fs_rename_noreplace(dst, tp);
+        return MJ_E_BUSY;
+    }
+    if (moved_to && moved_cap) snprintf(moved_to, moved_cap, "%s", dst);
+    return MJ_OK;
+}
+
+/* ---- appends ---- */
+
+mj_status mj_ledger_append_held(const mj_ledger_writer *w, mj_budget *b, mj_dream_record *r) {
     mj_ledger_state st, after;
     char line[MJ_LEDGER_RECORD_MAX + 2], body[MJ_LEDGER_RECORD_MAX + 2];
     size_t bl, ll;
     uint64_t sz = 0, bad;
     mj_dream_record chk;
-    mj_status s;
-    if (path == NULL || r == NULL) return MJ_E_INVAL;
+    mj_status s, ws;
+    const char *path;
+    if (w == NULL || r == NULL || !w->held) return MJ_E_INVAL;
+    path = w->ledger;
     s = mj_ledger_verify_file(path, b, &st, &bad);
     if (s != MJ_OK) return s;
     r->seq = st.count + 1;
@@ -223,10 +427,106 @@ mj_status mj_ledger_append(const char *path, mj_budget *b, mj_dream_record *r) {
     ll = mj_ledger_format_line(r, line, sizeof line);
     if (ll == 0) return MJ_E_LIMIT;
     if (mj_ledger_parse_line(line, ll - 1, &chk) != MJ_OK) return MJ_E_INVAL;
-    if (mj_fs_size(path, &sz) == MJ_OK && sz + ll > MJ_LEDGER_FILE_MAX) return MJ_E_FULL;
-    s = mj_fs_append_durable(path, line, ll);
+    s = mj_fs_size(path, &sz);
+    if (s == MJ_E_NOTFOUND) sz = 0;
+    else if (s != MJ_OK) return s;
+    if (sz + ll > MJ_LEDGER_FILE_MAX) return MJ_E_FULL;
+    ws = mj_fs_append_durable(path, line, ll);
+    if (ws == MJ_OK) {
+        s = mj_ledger_verify_file(path, b, &after, &bad);
+        if (s == MJ_OK && after.count == r->seq && memcmp(after.last_hash, r->hash, MJ_SHA256_LEN) == 0) return MJ_OK;
+        if (s == MJ_OK) s = MJ_E_CHAIN;
+    } else {
+        s = ws;
+    }
+    /* We hold the token and the chain verified at sz bytes, so anything past sz is what this call wrote. Cut it
+     * off again rather than leave a torn line that would block every later append. */
+    {
+        uint64_t now = 0;
+        if (mj_fs_size(path, &now) == MJ_OK && now > sz) (void)mj_fs_truncate(path, sz);
+    }
+    return s;
+}
+
+mj_status mj_ledger_append(const char *path, mj_budget *b, mj_dream_record *r) {
+    mj_ledger_writer w;
+    mj_ledger_holder h;
+    mj_status s, rs;
+    if (path == NULL || r == NULL) return MJ_E_INVAL;
+    s = mj_ledger_writer_claim(path, &w, &h);
+    if (s == MJ_E_BUSY) {
+        char who[256];
+        mj_ledger_holder_describe(&h, who, sizeof who);
+        fprintf(stderr,
+                "ledger %s: refused, another writer holds it: %s. If that run is gone, clear its token with "
+                "mj_ledger_verify --release-stale.\n",
+                path, who);
+        return s;
+    }
     if (s != MJ_OK) return s;
-    s = mj_ledger_verify_file(path, b, &after, &bad);
+    s = mj_ledger_append_held(&w, b, r);
+    rs = mj_ledger_writer_release(&w);
+    return s != MJ_OK ? s : rs;
+}
+
+/* ---- repair ---- */
+
+static int looks_like_record_start(const char *t, size_t n) {
+    static const char head[] = "MJL1|";
+    size_t i;
+    if (n == 0 || n > MJ_LEDGER_RECORD_MAX + 1u) return 0;
+    for (i = 0; i < n; ++i) {
+        unsigned char c = (unsigned char)t[i];
+        if (c < 0x20 || c > 0x7E) return 0;
+        if (i < sizeof head - 1 && t[i] != head[i]) return 0;
+    }
+    return 1;
+}
+
+mj_status mj_ledger_repair_tail(const mj_ledger_writer *w, mj_budget *b, size_t *removed, char *backup,
+                                size_t backup_cap) {
+    uint8_t *buf = NULL, *again = NULL;
+    size_t n = 0, n2 = 0, good = 0;
+    int torn = 0, wn;
+    uint64_t bad = 0;
+    mj_ledger_state st, st2;
+    mj_status s;
+    char when[21], stamp[16], bak[MJ_PATH_MAX];
+    size_t i, k = 0;
+    if (removed) *removed = 0;
+    if (backup && backup_cap) backup[0] = '\0';
+    if (w == NULL || !w->held) return MJ_E_INVAL;
+    s = mj_fs_read_all(w->ledger, MJ_LEDGER_FILE_MAX, b, &buf, &n);
     if (s != MJ_OK) return s;
-    return (after.count == r->seq && memcmp(after.last_hash, r->hash, MJ_SHA256_LEN) == 0) ? MJ_OK : MJ_E_CHAIN;
+    s = mj_ledger_check_tail((const char *)buf, n, &st, &bad, &good, &torn);
+    if (s != MJ_OK) goto out;                         /* a complete line is wrong: that is not a torn write */
+    if (!torn) goto out;                              /* nothing to do */
+    if (!looks_like_record_start((const char *)buf + good, n - good)) { s = MJ_E_CORRUPT; goto out; }
+    if ((s = mj_utc_now(when)) != MJ_OK) goto out;
+    for (i = 0; when[i] && k + 1 < sizeof stamp; ++i)
+        if (when[i] >= '0' && when[i] <= '9') stamp[k++] = when[i];
+    stamp[k] = '\0';
+    for (i = 0; i < 100; ++i) { /* never overwrite an older backup: take the next free name */
+        wn = i ? snprintf(bak, sizeof bak, "%s.torn-%s-%u.bak", w->ledger, stamp, (unsigned)i)
+               : snprintf(bak, sizeof bak, "%s.torn-%s.bak", w->ledger, stamp);
+        if (wn <= 0 || (size_t)wn >= sizeof bak || (size_t)wn >= MJ_PATH_MAX) { s = MJ_E_LIMIT; goto out; }
+        s = mj_fs_write_atomic(bak, buf, n, 0);
+        if (s != MJ_E_EXISTS) break;
+    }
+    if (s != MJ_OK) goto out;
+    if ((s = mj_fs_truncate(w->ledger, (uint64_t)good)) != MJ_OK) goto out;
+    /* the result must be exactly the complete lines we verified */
+    s = mj_fs_read_all(w->ledger, MJ_LEDGER_FILE_MAX, b, &again, &n2);
+    if (s != MJ_OK) goto out;
+    if (n2 != good || memcmp(again, buf, good) != 0) { s = MJ_E_CORRUPT; goto out; }
+    s = mj_ledger_verify_buf((const char *)again, n2, &st2, &bad);
+    if (s == MJ_OK && (st2.count != st.count || memcmp(st2.last_hash, st.last_hash, MJ_SHA256_LEN) != 0)) s = MJ_E_CHAIN;
+    if (s == MJ_OK) {
+        if (removed) *removed = n - good;
+        if (backup && backup_cap) snprintf(backup, backup_cap, "%s", bak);
+    }
+out:
+    if (again) mj_bfree(b, again, n2 ? n2 : 1);
+    if (buf) mj_bfree(b, buf, n ? n : 1);
+    return s;
 }

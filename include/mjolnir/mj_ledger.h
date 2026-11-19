@@ -9,6 +9,19 @@
  *   MJL1|seq|prev|dream|when|trigger|grader|inputs|before|candidate|edit|
  *   score_before|score_after|shift_bp|gates|outcome|notes|hash
  * hash = SHA-256 of everything before the final "|hash".
+ *
+ * One writer at a time: an append first creates <ledger>.writer exclusively
+ * (the writer token) and removes it when done. A second writer finds the
+ * token and is refused with MJ_E_BUSY; it never waits, and it never takes the
+ * token over. A token left by a run that died is cleared only on request
+ * (mj_ledger_writer_release_stale, `mj_ledger_verify --release-stale`), and only
+ * when the process named in it is provably not running on this host.
+ *
+ * A crash in the middle of an append can leave a cut-off last line. Appends
+ * refuse until it is repaired with mj_ledger_repair_tail
+ * (`mj_ledger_verify --repair-tail`), which keeps a backup copy, checks that every
+ * complete line still verifies, and only then cuts the incomplete line. It
+ * never edits or drops a complete record.
  * MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works. */
 #ifndef MJ_LEDGER_H
 #define MJ_LEDGER_H
@@ -65,8 +78,70 @@ mj_status mj_ledger_verify_buf(const char *buf, size_t n, mj_ledger_state *st, u
 mj_status mj_ledger_verify_file(const char *path, mj_budget *b, mj_ledger_state *st, uint64_t *bad_line);
 
 /* Verify the chain, then append r (seq, prev and hash are filled in) and
- * flush it to the disk. Refuses with MJ_E_CHAIN when the chain is broken. */
+ * flush it to the disk. Takes the writer token for the length of the call:
+ * MJ_E_BUSY (with one line on stderr naming the holder) when another writer
+ * holds it. Refuses with MJ_E_CHAIN when the chain is broken. If the write
+ * itself fails, the bytes this call added are cut off again, so a failed
+ * append never leaves a torn line behind. */
 mj_status mj_ledger_append(const char *path, mj_budget *b, mj_dream_record *r);
+
+/* ---- the writer token ---- */
+#define MJ_LEDGER_TOKEN_MAX 256u
+
+typedef struct mj_ledger_writer {
+    char ledger[MJ_PATH_MAX];
+    char token_path[MJ_PATH_MAX];
+    char token[MJ_LEDGER_TOKEN_MAX]; /* the exact bytes written, to recognise our own token */
+    size_t token_len;
+    int held;
+} mj_ledger_writer;
+
+/* Who holds a token, as written in it. */
+typedef struct mj_ledger_holder {
+    uint64_t pid;
+    uint64_t start;
+    char host[64];
+    char since[MJ_WHEN_MAX + 1];
+    char nonce[33];
+    int running;  /* mj_proc_running() for this host, or -1 for another host */
+    int same_host;
+} mj_ledger_holder;
+
+/* Claim the token for ledger. MJ_E_BUSY when someone holds it (holder filled
+ * in when not NULL). Holding it across several appends is fine; use
+ * mj_ledger_append_held for those. */
+mj_status mj_ledger_writer_claim(const char *ledger, mj_ledger_writer *w, mj_ledger_holder *holder);
+/* Remove our own token. Refuses (MJ_E_FORBIDDEN) if the file there is no
+ * longer the token we wrote; it is then left alone. */
+mj_status mj_ledger_writer_release(mj_ledger_writer *w);
+/* Read the current token. MJ_E_NOTFOUND when nobody holds it, MJ_E_CORRUPT
+ * when the file is there but unreadable (it is then treated as held). */
+mj_status mj_ledger_writer_holder(const char *ledger, mj_ledger_holder *h);
+/* Clear a token left by a run that is gone. Refuses with MJ_E_BUSY when the
+ * process named in it is (or may be) still running, and with MJ_E_FORBIDDEN
+ * when it was written on another host or cannot be read. The token is renamed
+ * to <ledger>.writer.stale-<when>-<nonce> for the record, not deleted. */
+mj_status mj_ledger_writer_release_stale(const char *ledger, mj_ledger_holder *h, char *moved_to, size_t moved_cap);
+/* One line describing h, for refusal messages. */
+void mj_ledger_holder_describe(const mj_ledger_holder *h, char *out, size_t cap);
+
+/* Append while holding w (claimed for this ledger). */
+mj_status mj_ledger_append_held(const mj_ledger_writer *w, mj_budget *b, mj_dream_record *r);
+
+/* ---- torn tails ---- */
+/* Check every complete line of buf. *good_len is the length up to and
+ * including the last '\n'; *torn is 1 when bytes follow it. MJ_OK when all
+ * complete lines verify (a torn tail alone is not an error here), MJ_E_CHAIN
+ * with *bad_line otherwise. */
+mj_status mj_ledger_check_tail(const char *buf, size_t n, mj_ledger_state *st, uint64_t *bad_line, size_t *good_len,
+                               int *torn);
+/* Repair a torn last line while holding w: refuse unless every complete line
+ * verifies and the leftover looks like the start of a record (printable, no
+ * newline, at most one record long, beginning with a prefix of "MJL1|"); write
+ * the whole file to <ledger>.torn-<when>.bak first; then cut the leftover and
+ * verify again. *removed is the number of bytes cut (0 when nothing was torn). */
+mj_status mj_ledger_repair_tail(const mj_ledger_writer *w, mj_budget *b, size_t *removed, char *backup,
+                                size_t backup_cap);
 
 /* Fill a record with "-" / zero defaults. */
 void mj_ledger_record_init(mj_dream_record *r);

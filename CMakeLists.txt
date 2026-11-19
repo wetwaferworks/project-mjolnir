@@ -110,7 +110,7 @@ set(MJ_TEST_TMP ${CMAKE_BINARY_DIR}/test-tmp)
 file(MAKE_DIRECTORY ${MJ_TEST_TMP})
 set(MJ_TEST_ENV "MJ_TEST_TMP=${MJ_TEST_TMP}")
 
-foreach(t test_hash test_store test_ledger test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank test_replay test_toytrain test_labeler test_hemi)
+foreach(t test_hash test_store test_ledger test_ledger_writer test_score test_update test_dream test_safet test_delta test_workcopy test_lowrank test_replay test_toytrain test_labeler test_hemi)
   add_executable(${t} tests/${t}.c)
   target_link_libraries(${t} PRIVATE mjolnir)
   target_include_directories(${t} PRIVATE tests)

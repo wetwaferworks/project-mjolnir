@@ -32,6 +32,29 @@ mj_status mj_fs_write_atomic(const char *path, const void *data, size_t n, int r
 /* Durable append: append n bytes and flush them to the disk before returning. */
 mj_status mj_fs_append_durable(const char *path, const void *data, size_t n);
 
+/* Create path only if it does not exist yet (O_EXCL / CREATE_NEW), write n
+ * bytes and flush them to the disk. MJ_E_EXISTS if it is already there. A
+ * symbolic link at path is never followed. This is how writer tokens claim a
+ * file: whoever creates it first holds it. */
+mj_status mj_fs_create_exclusive(const char *path, const void *data, size_t n);
+
+/* Cut a regular file back to size bytes and flush it. Refuses to grow it
+ * (MJ_E_INVAL when size is larger than the file). */
+mj_status mj_fs_truncate(const char *path, uint64_t size);
+
+/* Rename from to to, refusing (MJ_E_EXISTS) when to already exists. */
+mj_status mj_fs_rename_noreplace(const char *from, const char *to);
+
+/* This process: id and an opaque start stamp (0 when the system does not say),
+ * so a reused process id can be told apart from the original process. */
+void mj_proc_self(uint64_t *pid, uint64_t *start);
+/* 1: a process with this id and start stamp is running here; 0: it is not
+ * (gone, or the id now belongs to a different process); -1: cannot tell
+ * (treat as running). A start stamp of 0 matches any process with that id. */
+int mj_proc_running(uint64_t pid, uint64_t start);
+/* Host name as [A-Za-z0-9._-], at most cap-1 chars ("unknown-host" if unset). */
+void mj_host_name(char *out, size_t cap);
+
 /* Calls fn(name, user) for each regular file in dir (no "." or ".."). Stops
  * early when fn returns non-zero. At most max_entries are visited; more is
  * MJ_E_LIMIT. */

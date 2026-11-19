@@ -168,6 +168,96 @@ mj_status mj_fs_append_durable(const char *path, const void *data, size_t n) {
     return st;
 }
 
+
+mj_status mj_fs_create_exclusive(const char *path, const void *data, size_t n) {
+    HANDLE h;
+    mj_status st;
+    WPATH(w, path);
+    h = CreateFileW(w, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        return (e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS) ? MJ_E_EXISTS : MJ_E_IO;
+    }
+    st = write_handle(h, data, n);
+    CloseHandle(h);
+    if (st != MJ_OK) DeleteFileW(w);
+    return st;
+}
+
+mj_status mj_fs_truncate(const char *path, uint64_t size) {
+    HANDLE h;
+    LARGE_INTEGER cur, at;
+    BY_HANDLE_FILE_INFORMATION fi;
+    mj_status st = MJ_OK;
+    WPATH(w, path);
+    h = CreateFileW(w, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) return win_absent() ? MJ_E_NOTFOUND : MJ_E_IO;
+    if (!GetFileInformationByHandle(h, &fi) || (fi.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
+        !GetFileSizeEx(h, &cur))
+        st = MJ_E_IO;
+    else if ((uint64_t)cur.QuadPart < size) st = MJ_E_INVAL;
+    else {
+        at.QuadPart = (LONGLONG)size;
+        if (!SetFilePointerEx(h, at, NULL, FILE_BEGIN) || !SetEndOfFile(h) || !FlushFileBuffers(h)) st = MJ_E_IO;
+    }
+    CloseHandle(h);
+    return st;
+}
+
+mj_status mj_fs_rename_noreplace(const char *from, const char *to) {
+    WPATH(wf, from);
+    WPATH(wt, to);
+    if (MoveFileExW(wf, wt, MOVEFILE_WRITE_THROUGH)) return MJ_OK;
+    {
+        DWORD e = GetLastError();
+        if (e == ERROR_ALREADY_EXISTS || e == ERROR_FILE_EXISTS) return MJ_E_EXISTS;
+        return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? MJ_E_NOTFOUND : MJ_E_IO;
+    }
+}
+
+static uint64_t ft64(FILETIME f) { return ((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime; }
+
+void mj_proc_self(uint64_t *pid, uint64_t *start) {
+    FILETIME c, e, k, u;
+    *pid = (uint64_t)GetCurrentProcessId();
+    *start = GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u) ? ft64(c) : 0;
+}
+
+int mj_proc_running(uint64_t pid, uint64_t start) {
+    HANDLE h;
+    DWORD code = 0;
+    FILETIME c, e, k, u;
+    int r;
+    if (pid == 0 || pid > 0xFFFFFFFFu) return 0;
+    h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (h == NULL) return GetLastError() == ERROR_INVALID_PARAMETER ? 0 : -1; /* no such process / cannot look */
+    if (!GetExitCodeProcess(h, &code)) r = -1;
+    else if (code != STILL_ACTIVE) r = 0;
+    else if (start == 0) r = 1;
+    else if (!GetProcessTimes(h, &c, &e, &k, &u)) r = -1;
+    else r = ft64(c) == start ? 1 : 0;
+    CloseHandle(h);
+    return r;
+}
+
+void mj_host_name(char *out, size_t cap) {
+    wchar_t w[256];
+    char a[256];
+    DWORD n = 256;
+    size_t i, k = 0;
+    if (cap == 0) return;
+    if (!GetComputerNameW(w, &n) || WideCharToMultiByte(CP_UTF8, 0, w, -1, a, (int)sizeof a, NULL, NULL) <= 0) a[0] = '\0';
+    for (i = 0; a[i] && k + 1 < cap; ++i) {
+        char ch = a[i];
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-')
+            out[k++] = ch;
+    }
+    out[k] = '\0';
+    if (k == 0) snprintf(out, cap, "unknown-host");
+}
+
 mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void *user) {
     char pat[MJ_PATH_MAX];
     wchar_t wp[MJ_PATH_MAX];
@@ -345,6 +435,93 @@ mj_status mj_fs_append_durable(const char *path, const void *data, size_t n) {
     st = write_fd(fd, data, n);
     close(fd);
     return st;
+}
+
+
+mj_status mj_fs_create_exclusive(const char *path, const void *data, size_t n) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    mj_status st;
+    if (fd < 0) return errno == EEXIST ? MJ_E_EXISTS : MJ_E_IO;
+    st = write_fd(fd, data, n);
+    close(fd);
+    if (st != MJ_OK) unlink(path);
+    else sync_parent(path);
+    return st;
+}
+
+mj_status mj_fs_truncate(const char *path, uint64_t size) {
+    struct stat s;
+    mj_status st = MJ_OK;
+    int fd = open(path, O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return errno == ENOENT ? MJ_E_NOTFOUND : MJ_E_IO;
+    if (fstat(fd, &s) != 0 || !S_ISREG(s.st_mode)) st = MJ_E_IO;
+    else if ((uint64_t)s.st_size < size) st = MJ_E_INVAL;
+    else if (ftruncate(fd, (off_t)size) != 0 || fsync(fd) != 0) st = MJ_E_IO;
+    close(fd);
+    return st;
+}
+
+mj_status mj_fs_rename_noreplace(const char *from, const char *to) {
+    /* link() refuses an existing target; then the old name goes */
+    if (link(from, to) != 0) return errno == EEXIST ? MJ_E_EXISTS : (errno == ENOENT ? MJ_E_NOTFOUND : MJ_E_IO);
+    if (unlink(from) != 0) { (void)unlink(to); return MJ_E_IO; }
+    sync_parent(to);
+    return MJ_OK;
+}
+
+/* Start time of a process in clock ticks since boot (field 22 of
+ * /proc/<pid>/stat); 0 when there is no /proc. */
+static uint64_t proc_start_ticks(uint64_t pid) {
+    char p[64], buf[1024];
+    FILE *f;
+    size_t n;
+    char *q;
+    int field;
+    uint64_t v = 0;
+    snprintf(p, sizeof p, "/proc/%llu/stat", (unsigned long long)pid);
+    f = fopen(p, "r");
+    if (f == NULL) return 0;
+    n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    q = strrchr(buf, ')');
+    if (q == NULL) return 0;
+    ++q;
+    for (field = 2; *q && field < 22; ++q)
+        if (*q == ' ') ++field;
+    while (*q >= '0' && *q <= '9') { v = v * 10u + (uint64_t)(*q - '0'); ++q; }
+    return v;
+}
+
+void mj_proc_self(uint64_t *pid, uint64_t *start) {
+    *pid = (uint64_t)getpid();
+    *start = proc_start_ticks(*pid);
+}
+
+#include <signal.h>
+int mj_proc_running(uint64_t pid, uint64_t start) {
+    uint64_t now;
+    if (pid == 0 || pid > 0x7FFFFFFFu) return 0;
+    if (kill((pid_t)pid, 0) != 0 && errno == ESRCH) return 0;
+    if (start == 0) return 1;
+    now = proc_start_ticks(pid);
+    if (now == 0) return -1;
+    return now == start ? 1 : 0;
+}
+
+void mj_host_name(char *out, size_t cap) {
+    char a[256];
+    size_t i, k = 0;
+    if (cap == 0) return;
+    if (gethostname(a, sizeof a) != 0) a[0] = '\0';
+    a[sizeof a - 1] = '\0';
+    for (i = 0; a[i] && k + 1 < cap; ++i) {
+        char ch = a[i];
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-')
+            out[k++] = ch;
+    }
+    out[k] = '\0';
+    if (k == 0) snprintf(out, cap, "unknown-host");
 }
 
 mj_status mj_fs_list(const char *dir, size_t max_entries, mj_fs_list_fn fn, void *user) {

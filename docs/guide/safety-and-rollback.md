@@ -17,6 +17,8 @@ Versions are never overwritten, not even after they are retired. Retention keeps
 - Lessons from failed runs are not injected into prompts without JD's go.
 - Run logs are read-only. Replays never write beside their source.
 - Every dream, score, grade, apply and rollback is a ledger line. A broken chain stops all further writes until it is whole again.
+- One writer at a time: an append holds the ledger's writer token (`<ledger>.writer`), and a second writer is refused with the name of the holder. A token is never taken over; one left by a run that died is cleared by hand with `mj_ledger_verify --release-stale`, which refuses while that process may still be running.
+- A crash mid-append can leave a cut-off last line. `mj_ledger_verify --repair-tail` removes it only when every complete record verifies, after a full backup. A wrong complete record is never repaired, only reported.
 - Run data, stores, ledgers, grades and weights stay out of this repository (see `.gitignore`).
 
 ## What a failure looks like
@@ -30,4 +32,4 @@ mj_ledger_verify dreams.mjl
 mj_store_verify dream-store
 ```
 
-Both are read-only. The full list of standing gates is in [JD's decisions](decisions.md).
+Both are read-only. To check that nothing was removed or rewritten since you last looked, write down the head it prints and later run `mj_ledger_verify --expect SEQ:HEAD dreams.mjl`. The full list of standing gates is in [JD's decisions](decisions.md).

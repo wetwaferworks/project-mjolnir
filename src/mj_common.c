@@ -18,6 +18,7 @@ const char *mj_status_name(mj_status s) {
     case MJ_E_GATE: return "gate-failed";
     case MJ_E_FORBIDDEN: return "forbidden-by-gate";
     case MJ_E_CHAIN: return "chain-broken";
+    case MJ_E_BUSY: return "busy-another-writer";
     }
     return "unknown";
 }
