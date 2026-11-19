@@ -13,5 +13,12 @@ Public C headers for the M0 library, under `include/mjolnir/`. Each header has a
 | `mj_toy.h` | The toy policy (8 inputs, 4 actions, Q16) and the reward-weighted update rule with its gates. |
 | `mj_synth.h` | Synthetic dream material for M0 and the tests. |
 | `mj_dream.h` | The nightly-dream driver and the nap entry point. |
+| `mj_file.h` | Files read and written at an offset, file identity and link count, real paths, the read-only flag, streamed hashing and copying. |
+| `mj_safet.h` | The safetensors header reader, with every offset, size and shape checked against the file. |
+| `mj_bf16.h` | bfloat16 to and from float32, rounding as torch does. |
+| `mj_delta.h` | MJDELTA1 pack and unpack, byte for byte as Python writes it. |
+| `mj_apply.h` | Adding a chain of low-rank edits to one bf16 tensor, on the CPU or the GPU, with the same bytes either way. |
+| `mj_workcopy.h` | Checksums, the working copy, its state file and dirty marker, and checkout. |
+| `mj_session.h` | Register and apply, recorded in the real-weight ledger. |
 
 File formats are specified in [docs/FORMATS.md](../docs/FORMATS.md).

@@ -25,7 +25,10 @@ static uint32_t rnd(void) {
 
 static const char *TOKENS[] = {"|", "\n", "MJL1", "MJVER1", "id=", "seq=", "kind=", "nightly", "-", "0", "1",
                                "10000", "10001", "18446744073709551616", "=", "\r", ",", ".", "/", "..", "\\",
-                               "0000000000000000000000000000000000000000000000000000000000000000", "\0", "Z", "T"};
+                               "0000000000000000000000000000000000000000000000000000000000000000", "\0", "Z", "T",
+                               "\"", "{", "}", "[", "]", ":", "\\u", "\\ud800", "BF16", "data_offsets", "shape",
+                               "__metadata__", "\nend\n", "rows=", "cols=", "rank=", "scale=", "e-", "1e999",
+                               "4294967296", "tensor=", "count="};
 
 static size_t mutate(uint8_t *b, size_t n) {
     uint32_t ops = 1 + rnd() % 6, k;
@@ -79,6 +82,8 @@ static void reseal(size_t t, uint8_t *b, size_t n) {
                 break;
             }
         }
+    } else if (t == 5 && n >= 64) { /* a delta's trailing hash */
+        mj_sha256(b, n - 32, b + n - 32);
     } else if (t == 2 && n == MJ_TOY_BLOB_LEN) {
         uint32_t c = mj_crc32(b, n - 4);
         b[n - 4] = (uint8_t)c; b[n - 3] = (uint8_t)(c >> 8); b[n - 2] = (uint8_t)(c >> 16); b[n - 1] = (uint8_t)(c >> 24);
@@ -92,7 +97,8 @@ typedef struct target {
     size_t seed_len;
 } target;
 
-static target T[4];
+#define N_TARGETS 6
+static target T[N_TARGETS];
 
 static void seeds(void) {
     mj_dream_record r;
@@ -106,6 +112,8 @@ static void seeds(void) {
     T[1].name = "manifest"; T[1].fn = mj_fuzz_manifest;
     T[2].name = "toy"; T[2].fn = mj_fuzz_toy;
     T[3].name = "score"; T[3].fn = mj_fuzz_score;
+    T[4].name = "safet"; T[4].fn = mj_fuzz_safet;
+    T[5].name = "delta"; T[5].fn = mj_fuzz_delta;
 
     /* a real two-line ledger image */
     {
@@ -151,12 +159,39 @@ static void seeds(void) {
         T[3].seed[2 * i + 1] = run.seg[i].result;
     }
     T[3].seed_len = 2 * run.n;
+    {
+        static const char hdr[] =
+            "{\"__metadata__\":{\"format\":\"pt\"},\"a.w\":{\"dtype\":\"BF16\",\"shape\":[2,3],"
+            "\"data_offsets\":[0,12]},\"b\":{\"dtype\":\"F32\",\"shape\":[],\"data_offsets\":[12,16]},"
+            "\"c\":{\"dtype\":\"U8\",\"shape\":[0],\"data_offsets\":[16,16]}}  ";
+        memcpy(T[4].seed, hdr, sizeof hdr - 1);
+        T[4].seed_len = sizeof hdr - 1;
+    }
+    {
+        static const float U[6] = {1, 2, 3, 4, 5, 6}, V[6] = {0.5f, -1, 2, 0.25f, 3, -4};
+        mj_delta_entry e[2];
+        mj_budget db;
+        uint8_t *p;
+        size_t pn;
+        memset(e, 0, sizeof e);
+        memcpy(e[0].name, "layers.0.w", 11);
+        e[0].rows = 3; e[0].cols = 3; e[0].rank = 2; e[0].scale = 0.05; e[0].U = U; e[0].V = V;
+        memcpy(e[1].name, "b_2", 4);
+        e[1].rows = 1; e[1].cols = 2; e[1].rank = 1; e[1].scale = -1e-05; e[1].U = U; e[1].V = V;
+        mj_budget_init(&db, 1u << 20);
+        if (mj_delta_pack("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", e, 2, &db, &p, &pn) ==
+            MJ_OK) {
+            memcpy(T[5].seed, p, pn);
+            T[5].seed_len = pn;
+            mj_bfree(&db, p, pn);
+        }
+    }
 }
 
 static int write_seeds(const char *dir) {
     size_t t;
     seeds();
-    for (t = 0; t < 4; ++t) {
+    for (t = 0; t < N_TARGETS; ++t) {
         char p[MJ_PATH_MAX];
         snprintf(p, sizeof p, "%s/%s.seed", dir, T[t].name);
         (void)mj_fs_remove(p);
@@ -177,7 +212,7 @@ int main(int argc, char **argv) {
     t0 = mj_clock_ms();
     if (iters == 0 || iters > 100000000ul) iters = 100000ul;
     seeds();
-    for (t = 0; t < 4; ++t) {
+    for (t = 0; t < N_TARGETS; ++t) {
         unsigned long i;
         rng_state = seed ^ (0x9E3779B97F4A7C15ull * (t + 1));
         if (T[t].seed_len == 0) {
@@ -195,6 +230,6 @@ int main(int argc, char **argv) {
         }
         printf("fuzz %-8s %lu inputs, no crash, no invariant broken\n", T[t].name, iters);
     }
-    printf("fuzz total %lu inputs in %llu ms\n", iters * 4ul, (unsigned long long)(mj_clock_ms() - t0));
+    printf("fuzz total %lu inputs in %llu ms\n", iters * (unsigned long)N_TARGETS, (unsigned long long)(mj_clock_ms() - t0));
     return 0;
 }

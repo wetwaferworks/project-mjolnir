@@ -10,5 +10,8 @@ C unit tests for the M0 library, run by ctest. `mj_test.h` is the small shared t
 | `test_score.c` | Partial credit for mazes and circuits. |
 | `test_update.c` | The update rule improves without forgetting, rejects and rolls back. |
 | `test_dream.c` | The nightly driver and nap end to end, dry run only. |
+| `test_safet.c` | The safetensors header reader: bounds, sizes, overlaps, duplicate names, strict JSON. |
+| `test_delta.c` | MJDELTA1 pack and unpack, every refusal, and Python's float repr for the scale. |
+| `test_workcopy.c` | Register, apply, roll back, the dirty marker, the refusals, unique temporary names, and CPU/GPU agreement on the apply. |
 
 The fuzzer is in [`fuzz/`](fuzz/README.md). The full test list, including tool and Python tests, is in [build and test](../docs/guide/build-and-test.md).

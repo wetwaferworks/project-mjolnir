@@ -5,7 +5,9 @@
 #ifndef MJ_FUZZ_TARGETS_H
 #define MJ_FUZZ_TARGETS_H
 
+#include "mjolnir/mj_delta.h"
 #include "mjolnir/mj_ledger.h"
+#include "mjolnir/mj_safet.h"
 #include "mjolnir/mj_score.h"
 #include "mjolnir/mj_store.h"
 #include "mjolnir/mj_toy.h"
@@ -90,6 +92,65 @@ static int mj_fuzz_score(const uint8_t *d, size_t n) {
     if (mj_score_circuit(el, k, lab, &cs) == MJ_OK) {
         MJ_FUZZ_REQUIRE(cs.good + cs.not_yet == cs.total && cs.score_bp <= MJ_BP_FULL);
     }
+    return 0;
+}
+
+
+/* A safetensors header: anything accepted must be inside the file, sized by
+ * its shape, sorted, unique and free of overlaps. */
+static int mj_fuzz_safet(const uint8_t *d, size_t n) {
+    static mj_budget b;
+    mj_st_header h;
+    const uint64_t data = 4096;
+    size_t i;
+    if (b.cap == 0) mj_budget_init(&b, 512u << 20);
+    if (mj_st_parse((const char *)d, n, 8u + n + data, &b, &h) == MJ_OK) {
+        uint64_t prev_end = 0;
+        for (i = 0; i < h.count; ++i) {
+            const mj_st_tensor *t = &h.t[i];
+            MJ_FUZZ_REQUIRE(t->begin <= t->end && t->end <= data);
+            MJ_FUZZ_REQUIRE(t->nbytes == t->count * mj_st_dtype_size(t->dtype));
+            MJ_FUZZ_REQUIRE(t->abs_offset == 8u + n + t->begin);
+            if (i) MJ_FUZZ_REQUIRE(strcmp(h.t[i - 1].name, t->name) < 0);
+            MJ_FUZZ_REQUIRE(mj_st_find(&h, t->name) == t);
+        }
+        (void)prev_end;
+        mj_st_free(&h);
+    }
+    MJ_FUZZ_REQUIRE(b.used == 0);
+    return 0;
+}
+
+/* An MJDELTA1 file: anything accepted packs again into a file that reads
+ * back to the very same entries. */
+static int mj_fuzz_delta(const uint8_t *d, size_t n) {
+    static mj_budget b;
+    static mj_delta x, y;
+    uint8_t *p;
+    size_t m;
+    uint32_t k;
+    if (b.cap == 0) mj_budget_init(&b, 512u << 20);
+    if (mj_delta_unpack(d, n, &b, &x) == MJ_OK) {
+        MJ_FUZZ_REQUIRE(x.count >= 1 && x.count <= MJ_DELTA_MAX_ENTRIES);
+        if (mj_delta_pack(x.base, x.e, x.count, &b, &p, &m) == MJ_OK) {
+            MJ_FUZZ_REQUIRE(mj_delta_unpack(p, m, &b, &y) == MJ_OK);
+            MJ_FUZZ_REQUIRE(y.count == x.count && strcmp(x.base, y.base) == 0);
+            for (k = 0; k < x.count; ++k) {
+                MJ_FUZZ_REQUIRE(strcmp(x.e[k].name, y.e[k].name) == 0 && x.e[k].rows == y.e[k].rows &&
+                                x.e[k].cols == y.e[k].cols && x.e[k].rank == y.e[k].rank &&
+                                x.e[k].scale == y.e[k].scale);
+            }
+            MJ_FUZZ_REQUIRE(x.data_n == y.data_n && memcmp(x.data, y.data, x.data_n * sizeof(float)) == 0);
+            mj_delta_free(&y);
+            mj_bfree(&b, p, m);
+        } else {
+            uint32_t big = 0;
+            for (k = 0; k < x.count; ++k) big |= x.e[k].rank > MJ_DELTA_MAX_RANK;
+            MJ_FUZZ_REQUIRE(big); /* pack only refuses ranks it does not write */
+        }
+        mj_delta_free(&x);
+    }
+    MJ_FUZZ_REQUIRE(b.used == 0);
     return 0;
 }
 

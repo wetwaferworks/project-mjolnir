@@ -288,6 +288,11 @@ static int id_ever_used(mj_store *s, const char *id) {
     return 0;
 }
 
+int mj_store_ever_used(mj_store *s, const char *id) {
+    if (s == NULL || id == NULL || !mj_id_valid(id)) return 0;
+    return id_ever_used(s, id);
+}
+
 mj_status mj_store_put(mj_store *s, const char *id, mj_kind kind, const char *parent, const char *label,
                        const void *data, size_t n, mj_version_info *out) {
     mj_version_info v, back;
