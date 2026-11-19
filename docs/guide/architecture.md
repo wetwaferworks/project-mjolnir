@@ -42,7 +42,7 @@ From `include/mjolnir/mj_dream.h`:
 1. Refuse unless dry-run (stage M0 never changes live weights).
 2. Check the ledger chain; refuse to dream on a broken chain.
 3. Load and verify the live weights named by `HEAD`.
-4. Read the last dream's failure note and adapt (decision 10).
+4. Read the last dream's failure note and adapt (design principle 10).
 5. Snapshot the live weights into the store: the rollback point.
 6. Dream: reward-weighted nudges on a copy, old memories mixed in.
 7. Watch and rest: partial-credit scoring of the candidate.

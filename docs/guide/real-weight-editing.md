@@ -25,7 +25,7 @@ python -m mjolnir real-verify   --dir DIR --sums FILE
 
 ## The method
 
-A first-order, low-rank form of rank-one model editing after ROME (Meng, Bau, Andonian and Belinkov, "Locating and Editing Factual Associations in GPT", NeurIPS 2022, arXiv:2202.05262), reward-weighted per JD's decision 3. Each example's key is whitened by the covariance of the projection's inputs over ordinary text, applied through the Woodbury identity, so the edit follows what differs between maze steps and stays quiet elsewhere. The derivation is in the docstring of `python/mjolnir/real/edit.py`.
+A first-order, low-rank form of rank-one model editing after ROME (Meng, Bau, Andonian and Belinkov, "Locating and Editing Factual Associations in GPT", NeurIPS 2022, arXiv:2202.05262), reward-weighted per design principle 3. Each example's key is whitened by the covariance of the projection's inputs over ordinary text, applied through the Woodbury identity, so the edit follows what differs between maze steps and stays quiet elsewhere. The derivation is in the docstring of `python/mjolnir/real/edit.py`.
 
 ## Memory
 

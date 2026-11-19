@@ -17,7 +17,7 @@
 | **Nap** | A dream started early because there is new verified experience (`mj_nap`). |
 | **Nightly** | The scheduled dream, which also applies retention (`mj_nightly`). |
 | **Not yet** | The partial-credit label for the step where a run failed. |
-| **Partial credit** | Credit for everything a run got right before it failed (decision 8). |
+| **Partial credit** | Credit for everything a run got right before it failed (design principle 8). |
 | **Pin / milestone** | A version that retention never retires. |
 | **Productive** | A step that moved the task forward (earned a reward). |
 | **Q16** | Fixed-point weights, 65536 = 1.0, used by the toy policy. |

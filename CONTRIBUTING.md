@@ -8,6 +8,6 @@ Thank you for helping. Mjolnir changes how a model's weights change, so the bar 
 4. File format changes go in C, Python and the docs together, with a cross-check test.
 5. Never commit weights, run data, stores, ledgers, keys or personal paths.
 6. Read [AGENTS.md](AGENTS.md) for the invariants; they apply to everyone.
-7. Standing gates are JD's to lift, not a contributor's ([decisions](docs/guide/decisions.md)).
+7. Changes must keep the safeguards in [intended use and safety](docs/guide/intended-use-and-safety.md).
 
 By contributing you agree your work is released under the [MIT license](LICENSE).

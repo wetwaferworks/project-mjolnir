@@ -1,12 +1,12 @@
 <p align="center">
   <img src="docs/art/readme/mjolnir-header-1600x400.png"
-       alt="Project MJOLNIR, Measured Journal Operational Learning Neural Intelligent Researcher"
+       alt="Project MJOLNIR, Measured Journaled Operational Learning Neural Intelligent Researcher"
        width="1600">
 </p>
 
 # Project Mjolnir
 
-**Measured Journal Operational Learning Neural Intelligent Researcher.** The name and backronym are by Jaydee Wetwork.
+**Measured Journaled Operational Learning Neural Intelligent Researcher.** The name and backronym are by Jaydee Wetwork.
 *The researcher that dreams.*
 
 Mjolnir is the system that sits on top of [Bolt PCHIE](https://github.com/wetwaferworks/bolt-pch-ie) and improves a model's weights while it dreams. PCHIE is the seat: it runs whatever weights are plugged into it and checks every step they take. Mjolnir is the suit built around that seat. At night, or when there is something new worth learning, the model dreams about what it did. A changed copy of its weights is worked out inside the dream, scored, and then tested for real outside the dream. Only an edit that holds up outside the dream is allowed to land, and every dream is written into a hash chain, so the whole history of how the model changed can be replayed and checked by anyone.
@@ -63,7 +63,7 @@ Start with the [documentation index](docs/README.md). The main pages:
 - [The labeling tool](docs/guide/labeling.md)
 - [The real-weight edit path](docs/guide/real-weight-editing.md)
 - [Safety, gates and rollback](docs/guide/safety-and-rollback.md)
-- [JD's decisions](docs/guide/decisions.md): the eleven design decisions and the standing gates
+- [Design principles](docs/guide/design-principles.md) and [intended use and safety](docs/guide/intended-use-and-safety.md): what Mjolnir is for and how to use it carefully
 - [File formats](docs/FORMATS.md) (M0) and [stage M1](docs/M1.md) (M1 formats and the full M1 guide)
 - [Model access](docs/MODEL-ACCESS.md): API keys in Windows Credential Manager, no OAuth
 - [Roadmap](docs/ROADMAP.md)

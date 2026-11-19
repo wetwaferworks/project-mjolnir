@@ -4,7 +4,7 @@
 
 | Who | Contribution |
 |---|---|
-| **JD** (Jaydee Wetwork), Wet Wafer Works | Creator and author. Project Mjolnir, its design, the dreaming cycle, and every decision in [the decisions page](docs/guide/decisions.md). Teacher in the loop: labels data, grades outcomes and decides what counts as productive. |
+| **JD** (Jaydee Wetwork), Wet Wafer Works | Creator and author. Project Mjolnir, its design, the dreaming cycle, and its design principles. Teacher in the loop: labels data, grades outcomes and decides what counts as productive. |
 | **Elfie** (Muse Wonder) | Architecture and operation report; registrar. |
 | **Gizmo**, a.k.a. **Luna** (ChatGPT Luna 6) | Implementation brief: operational reasoning, planning, memory, preferences and orchestration. |
 | **Helia** (Google Hydrogen) | Contributor. |

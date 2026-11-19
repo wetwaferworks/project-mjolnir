@@ -6,7 +6,7 @@ Read in this order if you are new:
 2. [Architecture](architecture.md)
 3. [Getting started on Windows](getting-started-windows.md) or [on Linux](getting-started-linux.md)
 4. [Build and test](build-and-test.md)
-5. [JD's decisions and the standing gates](decisions.md)
+5. [Design principles](design-principles.md) and [intended use and safety](intended-use-and-safety.md)
 6. [Safety, gates and rollback](safety-and-rollback.md)
 7. [The labeling tool](labeling.md)
 8. [The real-weight edit path](real-weight-editing.md)

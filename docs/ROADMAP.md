@@ -1,6 +1,6 @@
 # Roadmap
 
-Nothing here is promised by a date. Each step starts only on JD's go, and the standing gates in [decisions](guide/decisions.md) hold throughout.
+Nothing here is promised by a date. The safeguards in [intended use and safety](guide/intended-use-and-safety.md) hold throughout.
 
 ## Done
 
@@ -18,4 +18,4 @@ Nothing here is promised by a date. Each step starts only on JD's go, and the st
 - Hosted-model help with grading or comparing answers, signed in with API keys only (see [model access](MODEL-ACCESS.md)).
 - Memory and preference tiers (layer D3) and the planning coordinator (layer D4) described in the [architecture](guide/architecture.md).
 - Benchmark-style evaluation loops for Little Nemo.
-- Dream material beyond mazes: circuit experiments and tests (decision 6).
+- Dream material beyond mazes: circuit experiments and tests (design principle 6).

@@ -49,6 +49,6 @@ Run the full ctest suite before proposing any change. Add `-DMJ_SANITIZE=ON` for
 - Don't commit weights, adapters, stores, ledgers, grades, replays or run output (see `.gitignore`).
 - Don't commit keys, tokens or passwords, or put them on a command line or in a log. Hosted-model keys live in Windows Credential Manager only ([model access](docs/MODEL-ACCESS.md)).
 - Don't commit personal paths, user names or machine names.
-- Don't feed lessons from failed runs into a model's prompt without JD's go.
-- Don't lift a standing gate. Only JD can ([decisions](docs/guide/decisions.md)).
+- Don't feed lessons from failed runs into a model's prompt.
+- Don't weaken a safeguard ([intended use and safety](docs/guide/intended-use-and-safety.md)).
 - Don't give the model tools; it only plays the task it is taught.
