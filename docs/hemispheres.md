@@ -229,7 +229,16 @@ What the gate still has to take on trust is the world's answer key itself: Mjoln
 
 ### Results on Bolt E4B
 
-The reviewed run (Mjolnir working out every score from holdout sets bound to each tail's SHA-256) is being repeated after the review fixes; its results will replace this paragraph.
+**The reviewed run** (19 November 2026, 04:04 to 04:15 ET). Bolt E4B through PCHIE, with the ternary tail of layers 38 to 41 as the left, the Q4 tail as the right, and the line between them as the only edit. PCHIE passed no scores: every number below was worked out by `mj_hemi gate` from the sealed holdout sets (117 held-out states, basis points cleared by the answer key), each bound to its tail's SHA-256.
+
+| Stage | What happened | Mjolnir |
+|---|---|---|
+| Classroom 1 | Lesson 75 steps, 69 cleared. Actor t=0 to t=3/8: 9230 to 9914. Watcher t=8/8 to t=5/8: judgments 9230 to 9914, own play 9230 to 9914 | keep, keep |
+| Classroom 2 | Lesson 75 of 75 cleared, no disagreements left. Actor t=3/8 to t=4/8 and watcher t=5/8 to t=3/8 both stay at 9914 | roll back, roll back; the classroom stops |
+| Swap 1 | Both passes 75 of 75. Child t=4/8 at 9914 ties both parents (9914, 9914) | roll back |
+| New model | t=3/8, 9914 bp, tail SHA-256 646e25c4... (provisional, the same tail as the first run) | 5 records, chain verified |
+
+The same decisions as the first run, now reached on Mjolnir's own numbers. Fed the run's real sets by hand, the gate keeps the first actor with the right parent (exit 0), refuses the same sets when told the parent was t=5/8 ("lesson set 1 was not played by the parent", exit 2), and rejects a holdout set with one flipped bit as corrupt (exit 1).
 
 **The first run, before the review fixes** (PCHIE passed the scores on the command line; kept as history). Bolt E4B through PCHIE, with the ternary tail of layers 38 to 41 as the left and the Q4 tail as the right, and the line between them as the only edit. Results on 117 holdout states (basis points cleared by the answer key):
 
