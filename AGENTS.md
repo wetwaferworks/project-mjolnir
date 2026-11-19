@@ -6,19 +6,19 @@ This file is for coding assistants and other automated contributors working in t
 
 | Path | Language | Role |
 |---|---|---|
-| `include/mjolnir/`, `src/` | C17 (one CUDA file) | The library. The reference for every file format. `src/mj_apply_cuda.cu` and `src/mj_lowrank_cuda.cu` are built only with `-DMJ_CUDA=ON`. |
+| `include/mjolnir/`, `src/` | C17, plus CUDA when enabled | The library. The reference for every file format. `src/mj_apply_cuda.cu`, `src/mj_lowrank_cuda.cu` and `src/mj_hemi_cuda.cu` are built only with `-DMJ_CUDA=ON`. |
 | `tools/` | C17 | `mj_nap`, `mj_nightly`, `mj_ledger_verify`, `mj_store_verify`, `mj_real`, `mj_m1`, `mj_hemi`. |
 | `tests/`, `tests/fuzz/` | C17 | Unit tests and the built-in fuzzer. |
-| `python/mjolnir/` | Python 3.11+ | The M1 package; `real/` is the real-weight edit path. |
+| `python/mjolnir/` | Python 3.11+ | Parity tests, and the real-weight steps that still run a large model. |
 | `python/tests/` | Python | unittest tests, including C/Python cross-checks. |
-| `docs/` | Markdown | Guide, formats, M1 guide, model access, roadmap. |
+| `docs/` | Markdown | Guide, formats, C port, hemispheres, model access, roadmap. |
 
 ## Commands
 
 ```
 cmake -S . -B build
 cmake --build build --config Release
-ctest --test-dir build -C Release          # expect 31/31 passing (23 without the Python tests)
+ctest --test-dir build -C Release          # expect 34/34 (26 without the Python tests)
 cd python && python -m mjolnir --help
 ```
 

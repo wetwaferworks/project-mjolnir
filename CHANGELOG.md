@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Documentation: the README and guide rewritten to the current tree, for people first. The named stages remain M0 and M1; work after M1 (the C and CUDA port, the hemispheres, the hardened ledger) is described as Unreleased, which is how this changelog lists it. The next named stage on the roadmap is still M2. There is no M3, M4 or M5 in this repository.
 - The Python ledger takes the same writer token as C. `ledger.append` creates `<ledger>.writer` exclusively in the C format (with the process start stamp the C side uses to tell a live writer from a dead one), refuses at once when anyone holds it, cuts off its own bytes if the append fails, and gives the token back. Before this, Python appends ignored the token and could interleave with a C writer. Tests include C reporting a live Python writer as running and refusing to clear it.
 - On Windows, folder listings skip symbolic links and junctions, as they already did on Linux, so a link dropped into a working folder cannot point a listing at a file elsewhere. Readers of the ledger and other files now let a writer keep appending while they read.
 - Apply and rollback check the original before restoring from it. The original model file is hashed in full through the very handle the restore reads from and compared with the base record; if it changed after register (a disk error or a stray write), the apply is refused before the dirty marker or any byte is written, and nothing is journaled, so "base" can never be rebuilt from a changed source. Both model files are also checked again on their open handles (same file as checked by name, working file not the original and not hard-linked), closing the gap between the check and the open. This costs one full read of the original per apply. Tested by flipping one byte of the original after register.
@@ -17,7 +18,7 @@
 - The labeling page in C (`mj_labeler`, `mj_m1 label`): the same page, order of steps, answers and grades ledger as the Python tool, on 127.0.0.1 only. Stalled connections are dropped after 5 seconds and the port is bound exclusively on Windows. Side-by-side parity test against the Python session; an HTTP fuzz target.
 - The low-rank edit in C (`mj_lowrank`, `mj_real lowrank`): whitening by the background keys, QR, SVD and truncation in double, with cuBLAS for the big products when built with CUDA. Matches Python's `low_rank` to a few parts in a million.
 
-- Documentation: a guide under `docs/guide/` (overview, architecture, getting started on Windows and Linux, build and test, decisions, safety and rollback, labeling, real-weight edits, glossary), a roadmap, a README in every source folder, and `AGENTS.md`, `CREDITS.md`, `CONTRIBUTING.md`, `SECURITY.md` and `PROVENANCE.md`.
+- Documentation: a guide under `docs/guide/` (overview, architecture, getting started on Windows and Linux, build and test, design principles, intended use and safety, labeling, real-weight edits, glossary), a roadmap, a README in every source folder, and `AGENTS.md`, `CREDITS.md`, `CONTRIBUTING.md`, `SECURITY.md` and `PROVENANCE.md`.
 
 ## M1
 

@@ -27,5 +27,8 @@ Public C headers for the M0 library, under `include/mjolnir/`. Each header has a
 | `mj_labeler.h` | The labeling page: the grading session, HTTP answers, and the local server. |
 | `mj_toytrain.h` | The toy nap from replays: features, training, gates, store and ledger. |
 | `mj_par.h` | Splitting a loop across threads and joining them, with no locks. |
+| `mj_hemi.h` | The classroom and the hemisphere swap on a shared hemisphere interface. |
+| `mj_classroom.h` | Stage 1 of the hemisphere pipeline: the actor, the watcher, lessons and holdout gates. |
+| `mj_hemi_gate.h` | The keep-or-roll-back decision for real models, from sealed sample sets. |
 
-File formats are specified in [docs/FORMATS.md](../docs/FORMATS.md).
+File formats are specified in [docs/FORMATS.md](../docs/FORMATS.md). The hemispheres are described in [docs/hemispheres.md](../docs/hemispheres.md).

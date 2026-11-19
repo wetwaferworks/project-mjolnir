@@ -1,4 +1,4 @@
-# M0 file formats
+# File formats
 
 All text files are ASCII with `\n` line endings. Every parser is strict: one spelling per value, no extra bytes, and anything else is refused.
 

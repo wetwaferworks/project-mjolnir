@@ -1,9 +1,10 @@
 # The C port
 
-Mjolnir's Python code is being moved to C (and CUDA where the GPU helps), one
-module at a time, with the same file formats. A Python module stays until its
-C replacement has passed parity tests against it; only then can it be
-considered for removal, and that is a separate, explicit decision.
+Mjolnir's Python code has been moved to C (and CUDA where the GPU helps), one
+module at a time, with the same file formats. This is work after M1, already
+in the tree and still listed as Unreleased in the changelog. A Python module
+stays until its C replacement has passed parity tests against it; only then
+can it be considered for removal, and that is a separate, explicit step.
 
 ## Where it stands
 

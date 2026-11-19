@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes how Mjolnir is put together, from the big picture down to each module. The file formats are in [FORMATS.md](../FORMATS.md) (M0) and [M1.md](../M1.md) (M1 additions).
+This page describes how Mjolnir is put together, from the big picture down to each module. How the stages are numbered is in the [overview](overview.md). The file formats are in [FORMATS.md](../FORMATS.md) and [M1.md](../M1.md). The ledger's writer token, repair and pinning are in [the dream ledger](the-ledger.md). The classroom and swap are in [the hemispheres](../hemispheres.md).
 
 ## The four layers (D1 to D4)
 
@@ -17,17 +17,16 @@ This page describes how Mjolnir is put together, from the big picture down to ea
 4. **Verify.** The candidate weights are put into a PCHIE and tested on the real task, outside the dream.
 5. **Integrate or roll back.** If the candidate holds up, the edit lands and the memories and preferences behind it are saved. If it fails, the edit is thrown away, the previous weights stay live, and the reason it failed becomes a note the next dream reads.
 
-The loop is guided, never fully self-recursive. A teacher stays in it: JD labels data, grades outcomes and decides what counts as productive.
+The loop is guided, never fully self-recursive. A teacher stays in it: a person labels data, grades outcomes and decides what counts as productive.
 
-
-In M0 the "watch" and "verify" steps are done by the toy scorer and gates; a live PCHIE watching the dream and verifying the candidate is M2 work (see the [roadmap](../ROADMAP.md)).
+In M0 the "watch" and "verify" steps are done by the toy scorer and gates. For real models, PCHIE can already play the rounds and hand sealed sample sets to `mj_hemi gate`, and Mjolnir works the scores out itself. A live PCHIE watching a dreamed edit on the working copy before it counts as integrated is M2 work (see the [roadmap](../ROADMAP.md)).
 
 ## Stage M0: the modules
 
 | Part | What it does |
 |---|---|
 | Weight version store (`mj_store`) | Saves every version once, named by its SHA-256. Takes a full snapshot before every dream. Writes go to a temporary file, are flushed to disk and then renamed into place, and every write is read back and checked. A version can never be overwritten, not even after it is retired. Rollback re-checks the old version before making it live. Keeps the newest 14 nightly versions, the newest 14 snapshots and 14 candidates, plus every pinned milestone and whatever is live. Retired versions keep their record. A storage ceiling and a free-disk floor are checked before anything is written. |
-| Dream ledger (`mj_ledger`) | One line per dream or grade: the dream, when it ran, what started it, who graded it, which replays went in, the weights before and the candidate, an edit summary, the scores, the behavior shift, each gate's result, the outcome, and the failure note. Every line carries the hash of the line before it and its own hash. Any change, deletion, reordering or torn write is caught at the exact line, and nothing more can be appended until the chain is whole again. `mj_ledger_verify` recomputes the chain from the start. |
+| Dream ledger (`mj_ledger`) | One line per dream or grade: the dream, when it ran, what started it, who graded it, which replays went in, the weights before and the candidate, an edit summary, the scores, the behavior shift, each gate's result, the outcome, and the failure note. Every line carries the hash of the line before it and its own hash. Any change, deletion, reordering or torn write is caught at the exact line, and nothing more can be appended until the chain is whole again. One writer at a time holds `<ledger>.writer`. `mj_ledger_verify` recomputes the chain, and can pin a head, show or release a stale token, and repair a torn last line. See [the dream ledger](the-ledger.md). |
 | Partial-credit scorer (`mj_score`) | Mazes are scored per segment: everything cleared before a failure is a success, the failure itself is "not yet", and anything after it is never graded. Circuits are scored per element: each working element is good and each faulty one is "not yet". Scores are integer basis points, so every machine gives the same answer. |
 | Update rule (`mj_toy`) | Reward-weighted nudges on the toy policy: cleared segments strengthen the action taken and the "not yet" segment weakens it. Old memories are replayed in between the new ones. No weight may move more than a set cap in one dream. Four gates decide the result: the step cap held, the behavior shift on a golden set stayed under its limit, the golden score did not drop, and the task score went up. |
 | Dream driver and nap (`mj_dream`, `mj_nightly`, `mj_nap`) | Checks the ledger, loads and checks the live weights, reads the last failure note and adjusts (half the step size and more old replay after a drift failure), takes the snapshot, dreams, scores, runs the gates, saves the candidate for the record, confirms the live weights did not move, and writes the ledger line. Both are dry runs in M0. The nightly run also applies the retention policy and re-checks the store. |
@@ -54,21 +53,27 @@ From `include/mjolnir/mj_dream.h`:
 
 Every fallible C call returns an `mj_status` (`include/mjolnir/mj_common.h`). Anything other than `MJ_OK` leaves the caller's state unchanged. The codes name the reason: bad input, I/O failure, refused overwrite, not found, checksum mismatch, storage ceiling, size or memory ceiling, time or step ceiling, failed gate, refused by a standing gate, or broken hash chain.
 
-## Stage M1: the modules
+## After M0: C, CUDA, and the M1 modules
 
-M1 adds a Python package that reads and writes exactly the same formats as the C library. The C library stays the reference, and the tests check both directions: the C tools accept what Python writes, and Python reads what C writes.
+Most of what started as the M1 Python package now has a C implementation, with CUDA where the GPU helps. C is the reference for every file format. The tests check both directions: the C tools accept what Python writes, and Python reads what C writes. Python remains for the steps that still run a large model's forward and backward passes (`real-dream`, `real-eval`), and as a parity check. The [C port page](../C-PORT.md) is the current map. The tools are `mj_m1` (replays, grades, the labeling page, the toy nap) and `mj_real` (register, apply, verify, rollback, low-rank edit).
+
+### Hemispheres
+
+The classroom (`mj_classroom`) and the hemisphere swap (`mj_hemisphere_swap`), driven by the `mj_hemi` tool, are later work in this same tree (listed as Unreleased, not as a new stage number). Each side is a model that can name a distribution over legal moves. The answer key is the final judge. Real models are decided by `mj_hemi gate`, which takes sealed sample sets and works out every score itself. See [the hemispheres](../hemispheres.md).
+
+### The M1 modules
 
 | Module | What it does |
 |---|---|
 | `mjolnir.common` | Shared rules for ids, free text, hashes, time and durable writes, mirroring `mj_common.c` and `mj_fs.c`. |
 | `mjolnir.ledger` | The MJL1 dream ledger. Appends are refused while the chain is broken, and every append is checked again on disk. |
 | `mjolnir.store` | The weight version store, same layout as `mj_store.c`. Refuses whole model files; real-weight edits are stored as deltas. |
-| `mjolnir.grades` | JD's grades in their own hash-chained ledger (`grades.mjl`). Grades are never edited; the latest grade for a step wins. |
+| `mjolnir.grades` | Grades in their own hash-chained ledger (`grades.mjl`). Grades are never edited; the latest grade for a step wins. The C side is `mj_grades` / `mj_m1 grade`. |
 | `mjolnir.replay` | Opens PCHIE research logs (`pchie.research.v1`) read-only, checks every line's hash and link, and labels each step productive, good or not yet. |
 | `mjolnir.labeler` | The labeling tool: a page on `127.0.0.1` that steps through runs, least certain steps first. See [the labeling tool](labeling.md). |
 | `mjolnir.toy` | The M0 toy policy (same byte format as `mj_toy.c`) and the features it reads from replay steps. |
 | `mjolnir.toytrain` | A nap for the toy policy, trained on the GPU from real replays and grades, gated by the M0 gates. |
-| `mjolnir.real` | The real-weight edit path: working copy, low-rank edits, in-memory trials, gates, apply and evaluate. See [the real-weight edit path](real-weight-editing.md). |
+| `mjolnir.real` | The real-weight edit path: working copy, low-rank edits, in-memory trials, gates, apply and evaluate. The C side is `mj_workcopy`, `mj_lowrank`, `mj_session` and `mj_real`. Evaluating a large model still runs in Python. See [the real-weight edit path](real-weight-editing.md). |
 
 ### The real-weight path, in brief
 

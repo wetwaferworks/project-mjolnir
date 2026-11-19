@@ -1,6 +1,6 @@
 # python/
 
-The stage M1 Python side. Run commands from this folder, or put it on `PYTHONPATH`.
+The Python package. Most commands now have a C tool (`mj_m1`, `mj_real`); this side remains for parity tests and for the real-weight steps that still run a large model. Run commands from this folder, or put it on `PYTHONPATH`.
 
 ```
 python -m mjolnir --help

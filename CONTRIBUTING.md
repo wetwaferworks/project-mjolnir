@@ -2,7 +2,7 @@
 
 Thank you for helping. Mjolnir changes how a model's weights change, so the bar is careful, small and tested.
 
-1. Build and run the whole suite first: `cmake -S . -B build && cmake --build build --config Release && ctest --test-dir build -C Release`. All 19 tests must pass.
+1. Build and run the whole suite first: `cmake -S . -B build && cmake --build build --config Release && ctest --test-dir build -C Release`. All 34 tests must pass in a Release build with the Python tests on (26 without them). See [build and test](docs/guide/build-and-test.md).
 2. Keep each change to one idea, with a test that fails before and passes after.
 3. C is C17 with no outside libraries and builds warning-free (`-Werror` / `/WX`). Python is 3.11+, standard library only outside `python/mjolnir/real/` and the toy trainer.
 4. File format changes go in C, Python and the docs together, with a cross-check test.
