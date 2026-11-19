@@ -8,6 +8,8 @@ verified again after it reaches the disk.
 MIT License, (c) 2026 Jaydee Wetwork / Wet Wafer Works.
 """
 import os
+import secrets
+import sys
 import re
 
 from .common import Corrupt, MjError, append_durable, id_valid, parse_u64, sha256_hex, text_valid, utc_now
@@ -141,16 +143,136 @@ def read(path):
     return out
 
 
+# ---- One writer at a time, shared with the C side (mj_ledger.c). ----
+# Before an append, "<ledger>.writer" is created exclusively with "MJW1|pid|start|host|since|nonce\n", where start
+# is the process start stamp the C side uses to tell a live writer from a dead one (Linux: field 22 of
+# /proc/<pid>/stat; Windows: the process creation FILETIME), and removed after. A token already there means
+# another writer (C or Python) holds the ledger: the append is refused at once, never waits and never takes the
+# token over. A token left by a run that died is cleared only by "mj_ledger_verify --release-stale".
+
+
+class Busy(MjError):
+    pass
+
+
+def _proc_start():
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class FT(ctypes.Structure):
+            _fields_ = [("lo", wintypes.DWORD), ("hi", wintypes.DWORD)]
+
+        c, e, k, u = FT(), FT(), FT(), FT()
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        if not k32.GetProcessTimes(k32.GetCurrentProcess(), ctypes.byref(c), ctypes.byref(e), ctypes.byref(k), ctypes.byref(u)):
+            return 0
+        return (c.hi << 32) | c.lo
+    try:
+        with open("/proc/self/stat", "rb") as fh:
+            buf = fh.read(1023)
+    except OSError:
+        return 0
+    q = buf.rfind(b")")
+    if q < 0:
+        return 0
+    fields = buf[q + 1:].split(b" ")
+    # fields[0] is empty (the space after ')'), fields[1] is field 3 (state); field 22 is fields[20]
+    try:
+        return int(fields[20])
+    except (IndexError, ValueError):
+        return 0
+
+
+def _host_name():
+    if sys.platform == "win32":
+        import ctypes
+        buf = ctypes.create_unicode_buffer(256)
+        n = ctypes.c_uint32(256)
+        name = buf.value if ctypes.windll.kernel32.GetComputerNameW(buf, ctypes.byref(n)) else ""
+    else:
+        import socket
+        try:
+            name = socket.gethostname()
+        except OSError:
+            name = ""
+    out = "".join(ch for ch in name if ch.isascii() and (ch.isalnum() or ch in "._-"))[:63]
+    return out or "unknown-host"
+
+
+def _token_path(path):
+    return path + ".writer"
+
+
+def _claim(path):
+    tp = _token_path(path)
+    token = "MJW1|%d|%d|%s|%s|%s\n" % (os.getpid(), _proc_start(), _host_name(), utc_now(), secrets.token_hex(16))
+    data = token.encode("ascii")
+    try:
+        fd = os.open(tp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+    except FileExistsError:
+        try:
+            with open(tp, "rb") as fh:
+                held = fh.read(512).decode("ascii", "replace").strip()
+        except OSError:
+            held = "(unreadable)"
+        raise Busy("ledger %s: refused, another writer holds it (%s). If that run is gone, clear its token with "
+                   "mj_ledger_verify --release-stale %s" % (path, held, path))
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        os.remove(tp)
+        raise
+    os.close(fd)
+    return data
+
+
+def _release(path, data):
+    tp = _token_path(path)
+    try:
+        with open(tp, "rb") as fh:
+            now = fh.read(len(data) + 1)
+    except OSError:
+        return
+    if now != data:
+        return  # not ours any more: leave it alone
+    gone = tp + ".released-" + data.decode("ascii").rstrip("\n")[-32:]
+    os.rename(tp, gone)  # the token's name is free at once, even if someone is reading it
+    try:
+        os.remove(gone)
+    except OSError:
+        pass
+
+
 def append(path, r):
-    """Verify the chain, append one record durably, verify again. Returns its seq."""
-    chain = read(path)
-    seq = len(chain) + 1
-    prev = chain[-1][2] if chain else ZERO
-    line = format_line(seq, prev, r)
-    if os.path.exists(path) and os.path.getsize(path) + len(line) > FILE_MAX:
-        raise MjError("ledger would pass its size limit")
-    append_durable(path, line)
-    after = read(path)
-    if len(after) != seq or after[-1][2] != sha256_hex(line[:-66]):
-        raise ChainBroken(seq, "record did not land as written")
-    return seq
+    """Take the writer token, verify the chain, append one record durably, verify again, give the token back.
+    Returns its seq. Refuses (Busy) when another writer holds the ledger. A failed append cuts off its own bytes."""
+    token = _claim(path)
+    try:
+        chain = read(path)
+        seq = len(chain) + 1
+        prev = chain[-1][2] if chain else ZERO
+        line = format_line(seq, prev, r)
+        before = os.path.getsize(path) if os.path.exists(path) else 0
+        if before + len(line) > FILE_MAX:
+            raise MjError("ledger would pass its size limit")
+        try:
+            append_durable(path, line)
+            after = read(path)
+            if len(after) != seq or after[-1][2] != sha256_hex(line[:-66]):
+                raise ChainBroken(seq, "record did not land as written")
+        except BaseException:
+            if os.path.exists(path) and os.path.getsize(path) > before:
+                with open(path, "r+b") as fh:
+                    fh.truncate(before)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+            raise
+        return seq
+    finally:
+        _release(path, token)
